@@ -5,6 +5,7 @@ import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { TropicalFishSchool } from "./TropicalFishSchool";
 import { GreatWhiteSharks } from "./GreatWhiteSharks";
+import { BottlenoseDolphins } from "./BottlenoseDolphins";
 
 
 /**
@@ -740,6 +741,7 @@ function SceneContent() {
       <CoralField />
       <TropicalFishSchool />
       <GreatWhiteSharks />
+      <BottlenoseDolphins />
       <SkyWire />
     </>
   );

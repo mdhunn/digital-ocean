@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { fishWorldPositions } from "./creatureRegistry";
+import { fishWorldPositions, dolphinWorldPositions, registerSharkPositions } from "./creatureRegistry";
 
 /**
  * High-polygon great white sharks (Carcharodon carcharias).
@@ -992,10 +992,18 @@ const _tmp = new THREE.Vector3();
 const _look = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 
-function findNearestFish(from: THREE.Vector3): THREE.Vector3 | null {
+function findNearestPrey(from: THREE.Vector3): THREE.Vector3 | null {
   let best: THREE.Vector3 | null = null;
   let bestD = HUNT_DETECT * HUNT_DETECT;
   for (const p of fishWorldPositions) {
+    const d2 = from.distanceToSquared(p);
+    if (d2 < bestD) {
+      bestD = d2;
+      best = p;
+    }
+  }
+  // Dolphins are also potential targets when hungry, but harder to catch
+  for (const p of dolphinWorldPositions) {
     const d2 = from.distanceToSquared(p);
     if (d2 < bestD) {
       bestD = d2;
@@ -1014,7 +1022,7 @@ function aiStep(sharks: SharkSim[], dt: number) {
     _steer.set(0, 0, 0);
 
     if (hungry && s.biteCooldown <= 0) {
-      const prey = findNearestFish(s.pos);
+      const prey = findNearestPrey(s.pos);
       s.huntTarget = prey;
       if (prey) {
         _tmp.copy(prey).sub(s.pos);
@@ -1135,6 +1143,7 @@ export function GreatWhiteSharks() {
   useFrame(({ clock }, delta) => {
     const dt = Math.min(delta, 0.05);
     const t = clock.elapsedTime;
+    registerSharkPositions(sharks.map((s) => s.pos));
     aiStep(sharks, dt);
 
     for (let i = 0; i < sharks.length; i++) {

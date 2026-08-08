@@ -16,6 +16,14 @@ Interactive **3D GPU wireframe ocean** — a retro digital reef scene built with
   - Countershaded wireframe (steel dorsal / white ventral), full fin set, gills, teeth
   - Thunniform soft-body swim (stiff head, flexible caudal)
   - Cruise **much slower** than tropical fish; **hunt only when hungry**
+  - Pursue fish **and dolphins** when hungry (dolphins usually out-swim them)
+- **Bottlenose dolphins** with high-polygon anatomy and soft-body physics
+  - Anatomy from multi-angle refs: side profile, dorsal/top, ventral, frontal
+  - Rostrum + melon, blowhole, falcate dorsal, pectoral flippers, **horizontal flukes**
+  - Countershaded slate-grey dorsal / pale ventral
+  - Soft-body **dorsoventral** undulation (cetacean fluke drive — not lateral like sharks)
+  - **Friendly & curious** about the cursor/pointer (approach, circle, investigate)
+  - **Alarm & flee** when sharks come near; swim **faster** than great whites
 - Corner **digital clock** with month calendar
   - Starts in **24-hour** mode
   - Tap to cycle: 24-hour → 12-hour → hidden
