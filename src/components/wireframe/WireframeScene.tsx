@@ -3,11 +3,12 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import { TropicalFishSchool } from "./TropicalFishSchool";
 
 /**
  * World layout (Y up):
  *   SURFACE_Y  — undulating water ceiling (always above the camera)
- *   mid-water  — camera orbit zone
+ *   mid-water  — camera orbit zone + indifferent CA fish school
  *   SEABED_Y   — static sea floor base + coral
  */
 const SURFACE_Y = 12;
@@ -735,6 +736,7 @@ function SceneContent() {
       <Ocean />
       <Cliffs />
       <CoralField />
+      <TropicalFishSchool />
       <SkyWire />
     </>
   );

@@ -7,6 +7,10 @@ Interactive **3D GPU wireframe ocean** — a retro digital reef scene built with
 - Undulating wireframe ocean **surface** (ceiling view from underwater)
 - Static **sea floor** meeting cliff bases, with coral colonies planted on the sand
 - Wireframe **sea cliffs**, coral, and a soft sun/sky
+- School of **cellular automata tropical fish**
+  - High-polygon wireframe bodies with **soft-body physics** (Verlet + springs)
+  - CA-driven schooling (boids + ring cellular automaton) for emergent swim waves
+  - Completely **indifferent** to mouse / tap / pointer — only the camera orbits on drag
 - Corner **digital clock** with month calendar
   - Starts in **24-hour** mode
   - Tap to cycle: 24-hour → 12-hour → hidden
