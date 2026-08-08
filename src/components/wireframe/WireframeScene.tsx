@@ -4,6 +4,8 @@ import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { TropicalFishSchool } from "./TropicalFishSchool";
+import { GreatWhiteSharks } from "./GreatWhiteSharks";
+
 
 /**
  * World layout (Y up):
@@ -737,6 +739,7 @@ function SceneContent() {
       <Cliffs />
       <CoralField />
       <TropicalFishSchool />
+      <GreatWhiteSharks />
       <SkyWire />
     </>
   );

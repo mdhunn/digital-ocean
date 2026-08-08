@@ -1,6 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import { registerFishPositions } from "./creatureRegistry";
 
 /**
  * Soft-body cellular-automata tropical fish school.
@@ -759,6 +760,7 @@ export function TropicalFishSchool() {
   const school = useMemo(() => {
     const fish: FishSim[] = [];
     for (let i = 0; i < SCHOOL_COUNT; i++) fish.push(createFish(i));
+    registerFishPositions(fish.map((f) => f.pos));
     return fish;
   }, []);
 

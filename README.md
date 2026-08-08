@@ -11,6 +11,11 @@ Interactive **3D GPU wireframe ocean** — a retro digital reef scene built with
   - High-polygon wireframe bodies with **soft-body physics** (Verlet + springs)
   - CA-driven schooling (boids + ring cellular automaton) for emergent swim waves
   - Completely **indifferent** to mouse / tap / pointer — only the camera orbits on drag
+- **Great white sharks** with high-polygon anatomy and soft-body physics
+  - Realistic proportions from multi-angle reference (side, top, bottom, front)
+  - Countershaded wireframe (steel dorsal / white ventral), full fin set, gills, teeth
+  - Thunniform soft-body swim (stiff head, flexible caudal)
+  - Cruise **much slower** than tropical fish; **hunt only when hungry**
 - Corner **digital clock** with month calendar
   - Starts in **24-hour** mode
   - Tap to cycle: 24-hour → 12-hour → hidden
