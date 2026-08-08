@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { fishWorldPositions, dolphinWorldPositions, registerSharkPositions } from "./creatureRegistry";
+import { fishWorldPositions, dolphinWorldPositions, mermaidWorldPositions, registerSharkPositions } from "./creatureRegistry";
 
 /**
  * High-polygon great white sharks (Carcharodon carcharias).
@@ -1004,6 +1004,14 @@ function findNearestPrey(from: THREE.Vector3): THREE.Vector3 | null {
   }
   // Dolphins are also potential targets when hungry, but harder to catch
   for (const p of dolphinWorldPositions) {
+    const d2 = from.distanceToSquared(p);
+    if (d2 < bestD) {
+      bestD = d2;
+      best = p;
+    }
+  }
+  // Mermaids — fast prey; sharks try when hungry but mermaids out-swim them
+  for (const p of mermaidWorldPositions) {
     const d2 = from.distanceToSquared(p);
     if (d2 < bestD) {
       bestD = d2;
