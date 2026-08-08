@@ -28,21 +28,27 @@ import {
 const SURFACE_Y = 12;
 const SEABED_Y = -1.5;
 const MERMAID_COUNT = 3;
-const SPINE_LEN = 64;
-const RADIAL = 44;
-const SOFT_ITERS = 4;
-const BODY_LEN = 5.8;
+const SPINE_LEN = 72;
+const RADIAL = 48;
+const SOFT_ITERS = 5;
+const BODY_LEN = 6.0;
 
-/** Human torso ends / scaled hips begin */
-const TORSO_END = 0.42;
-/** Head soft-body freeze (pin + no undulation) */
-const HEAD_FREEZE_U = 0.12;
-/** Bust peak along body fraction */
-const BUST_U = 0.2;
-/** Waist narrowest */
-const WAIST_U = 0.3;
-/** Hip max before tail */
-const HIP_U = 0.4;
+/**
+ * Body fraction landmarks (u: 0 crown → 1 caudal base)
+ * Tuned so human half ≈ 40% length, tail ≈ 60% (classic mermaid silhouette).
+ */
+const U_HEAD_END = 0.09;
+const U_NECK_END = 0.13;
+const U_SHOULDER = 0.155;
+const BUST_U = 0.195;
+const U_UNDERBUST = 0.24;
+const WAIST_U = 0.295;
+const HIP_U = 0.38;
+const TORSO_END = 0.42; // scale belt / human→fish blend complete
+/** Pin + no undulation through neck (keep face/neck solid) */
+const HEAD_FREEZE_U = 0.13;
+/** Strong shape retention through bust/waist (anatomy holds while soft) */
+const TORSO_RETAIN_U = 0.36;
 
 /* ── materials ─────────────────────────────────────────────────── */
 
@@ -105,82 +111,124 @@ function seeded(n: number) {
 }
 
 /* ── Anatomical profiles (multi-angle) ───────────────────────────
- * u: 0 = crown → 1 = caudal peduncle base
+ * Side: crown→brow→chin→neck→clavicle→bust→waist→hips→scale belt→tail→peduncle
+ * Front: head ~½ shoulder width; hourglass waist; hip flare; dual bust lobes
+ * Top:  shoulder breadth, spine valley, hip width, long tapering tail
+ * Bottom: chin/throat, underbust crease, soft belly, ventral scale V
  *
- * Side profile (from refs):
- *   crown → brow → jaw → neck → clavicle → bust peak → underbust →
- *   waist cinch → hip flare → scale belt → long tapering tail → peduncle
- *
- * Front: shoulders ~2× head, bust lobes, navel, hip width > waist
- * Top:   hair volume, shoulder width, spine ridge, tail dorsal keel
- * Bottom: chin→throat, breast unders, soft belly, ventral scale V
+ * Target radii (approx at BODY_LEN=6):
+ *   head ~0.17  neck ~0.11  shoulder ~0.38  bust ~0.40  waist ~0.24  hip ~0.42
  */
 
+function smoothstep(e0: number, e1: number, x: number): number {
+  const t = THREE.MathUtils.clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 function bodyRadius(u: number): number {
-  // Head (sphere-ish)
-  if (u < 0.02) return 0.12 + u * 6;
-  if (u < 0.07) return 0.24 + (u - 0.02) * 1.1; // ~0.24–0.295 cranium
-  if (u < 0.1) return 0.295 - (u - 0.07) * 2.2; // jaw taper
-  // Neck
-  if (u < 0.14) return 0.229 - (u - 0.1) * 1.1; // ~0.185 neck
-  // Shoulders / upper chest
-  if (u < 0.17) return 0.185 + (u - 0.14) * 8.5; // swell to shoulders
-  // Bust region
-  if (u < 0.24) return 0.44 + (u - 0.17) * 1.6; // ~0.44–0.55
-  // Underbust → waist
-  if (u < WAIST_U) return 0.552 - (u - 0.24) * 2.8; // cinch to ~0.38
-  // Hip flare
-  if (u < HIP_U) return 0.384 + (u - WAIST_U) * 2.6; // → ~0.64
-  // Scale transition / upper tail
-  if (u < 0.5) return 0.644 - (u - HIP_U) * 1.1;
-  if (u < 0.62) return 0.534 - (u - 0.5) * 1.35;
-  if (u < 0.75) return 0.372 - (u - 0.62) * 1.15;
-  if (u < 0.88) return 0.2225 - (u - 0.75) * 0.85;
-  if (u < 0.96) return 0.112 - (u - 0.88) * 0.55;
-  return 0.068 - (u - 0.96) * 0.4;
+  // ── HEAD: compact sphere (must stay clearly smaller than shoulders)
+  if (u < 0.015) return 0.06 + u * 7.5; // crown soft start
+  if (u < 0.045) return 0.172 + (u - 0.015) * 0.9; // cranium peak ~0.20
+  if (u < 0.07) return 0.199 - (u - 0.045) * 0.6; // temples → cheeks
+  if (u < U_HEAD_END) return 0.184 - (u - 0.07) * 2.8; // jaw → chin ~0.13
+
+  // ── NECK: narrow cylinder
+  if (u < U_NECK_END) {
+    const t = (u - U_HEAD_END) / (U_NECK_END - U_HEAD_END);
+    return 0.13 - t * 0.02; // ~0.13 → 0.11
+  }
+
+  // ── SHOULDERS: rapid flare
+  if (u < U_SHOULDER) {
+    const t = (u - U_NECK_END) / (U_SHOULDER - U_NECK_END);
+    return 0.11 + smoothstep(0, 1, t) * 0.27; // → ~0.38
+  }
+
+  // ── BUST shelf (overall ribcage; lobes added in sampleBodyRing)
+  if (u < U_UNDERBUST) {
+    const t = (u - U_SHOULDER) / (U_UNDERBUST - U_SHOULDER);
+    // slight peak near BUST_U then ease
+    const peak = Math.sin(t * Math.PI) * 0.05;
+    return 0.38 + peak - t * 0.02; // ~0.38–0.41
+  }
+
+  // ── UNDERBUST → WAIST cinch (hourglass)
+  if (u < WAIST_U) {
+    const t = (u - U_UNDERBUST) / (WAIST_U - U_UNDERBUST);
+    return 0.36 - smoothstep(0, 1, t) * 0.12; // → ~0.24
+  }
+
+  // ── WAIST → HIPS flare
+  if (u < HIP_U) {
+    const t = (u - WAIST_U) / (HIP_U - WAIST_U);
+    return 0.24 + smoothstep(0, 1, t) * 0.2; // → ~0.44
+  }
+
+  // ── HIP → SCALE BELT (blend into fish body, stay full)
+  if (u < TORSO_END) {
+    const t = (u - HIP_U) / (TORSO_END - HIP_U);
+    return 0.44 - t * 0.04; // gentle
+  }
+
+  // ── FISH TAIL: long elegant fusiform taper
+  if (u < 0.52) {
+    const t = (u - TORSO_END) / (0.52 - TORSO_END);
+    return 0.4 - t * 0.08; // still full upper tail
+  }
+  if (u < 0.68) {
+    const t = (u - 0.52) / 0.16;
+    return 0.32 - t * 0.12; // mid taper
+  }
+  if (u < 0.82) {
+    const t = (u - 0.68) / 0.14;
+    return 0.2 - t * 0.08;
+  }
+  if (u < 0.93) {
+    const t = (u - 0.82) / 0.11;
+    return 0.12 - t * 0.05; // peduncle
+  }
+  return 0.07 - (u - 0.93) * 0.25;
 }
 
-/** Vertical scale — head tall, bust deep, waist, hips, flat-ish tail */
+/** Vertical ellipse — head taller, bust deep, peduncle flattened */
 function bodyHeightScale(u: number): number {
-  if (u < 0.08) return 1.08; // skull
-  if (u < 0.14) return 1.02; // neck
-  // Bust: deeper front (handled in sample), overall height
-  if (u < 0.26) return 1.12 + Math.sin(((u - 0.14) / 0.12) * Math.PI) * 0.18;
-  if (u < WAIST_U) return 1.05;
-  if (u < HIP_U) return 1.08 + (u - WAIST_U) * 0.35;
-  // Tail: more vertically oval mid-tail, flattened peduncle
-  if (u < 0.7) return 1.05 - (u - HIP_U) * 0.15;
-  if (u < 0.9) return 0.995 + (u - 0.7) * 0.2;
-  return 1.05;
+  if (u < U_HEAD_END) return 1.12; // skull slightly tall
+  if (u < U_NECK_END) return 1.05;
+  if (u < U_UNDERBUST) return 1.08 + Math.sin(((u - U_NECK_END) / 0.12) * Math.PI) * 0.12;
+  if (u < WAIST_U) return 1.02;
+  if (u < HIP_U) return 1.06 + (u - WAIST_U) * 0.4; // hip depth
+  if (u < 0.55) return 1.1;
+  if (u < 0.8) return 1.05 + (u - 0.55) * 0.15; // mid-tail oval
+  return 0.95 - (u - 0.8) * 0.3; // peduncle flatter
 }
 
-/** Lateral width — shoulders, bust, waist, hips */
+/** Lateral width — shoulders wide, waist narrow, hips wide */
 function bodyWidthScale(u: number): number {
-  if (u < 0.08) return 0.92; // head slightly oval
-  if (u < 0.14) return 0.88; // neck
-  if (u < 0.18) return 0.88 + (u - 0.14) * 4.5; // shoulder flare
-  if (u < 0.26) return 1.06; // bust width
-  if (u < WAIST_U) return 1.06 - (u - 0.26) * 2.2; // waist narrow
-  if (u < HIP_U) return 0.972 + (u - WAIST_U) * 2.4; // hip wide
-  if (u < 0.55) return 1.212 - (u - HIP_U) * 0.9;
-  if (u < 0.8) return 1.077 - (u - 0.55) * 1.4;
-  return 0.727 - (u - 0.8) * 1.1;
+  if (u < U_HEAD_END) return 0.88; // head slightly narrow vs height
+  if (u < U_NECK_END) return 0.82;
+  if (u < U_SHOULDER) return 0.82 + ((u - U_NECK_END) / (U_SHOULDER - U_NECK_END)) * 0.35;
+  if (u < U_UNDERBUST) return 1.12; // shoulder/ribcage width
+  if (u < WAIST_U) return 1.12 - ((u - U_UNDERBUST) / (WAIST_U - U_UNDERBUST)) * 0.28; // cinch
+  if (u < HIP_U) return 0.84 + ((u - WAIST_U) / (HIP_U - WAIST_U)) * 0.38; // hip width
+  if (u < 0.55) return 1.18 - (u - HIP_U) * 0.7;
+  if (u < 0.8) return 1.05 - (u - 0.55) * 1.3;
+  return 0.72 - (u - 0.8) * 1.0;
 }
 
 /**
- * Spine centerline Y — human upright offset in head/torso,
- * gentle S-curve into tail (mermaid often slightly arched).
+ * Spine centerline Y — slight lordosis through lumbar, chest lift,
+ * gentle S into tail (swimming arch).
  */
 function spineYOffset(u: number): number {
-  if (u < 0.08) return 0.02; // head slightly above
-  if (u < 0.14) return 0.01;
-  // Chest lift
-  if (u < 0.28) return 0.02 + Math.sin(((u - 0.14) / 0.14) * Math.PI) * 0.04;
-  // Soft lumbar curve
-  if (u < TORSO_END) return 0.01 - Math.sin(((u - 0.28) / 0.14) * Math.PI) * 0.03;
-  // Tail slightly below then rises toward peduncle
-  if (u < 0.75) return -0.02 - Math.sin(((u - TORSO_END) / 0.33) * Math.PI) * 0.04;
-  return -0.02 + (u - 0.75) * 0.06;
+  if (u < U_HEAD_END) return 0.03;
+  if (u < U_NECK_END) return 0.02;
+  // Chest / bust lift
+  if (u < U_UNDERBUST) return 0.02 + Math.sin(((u - U_NECK_END) / 0.11) * Math.PI) * 0.035;
+  // Lumbar curve (slight swayback)
+  if (u < HIP_U) return 0.01 - Math.sin(((u - U_UNDERBUST) / 0.14) * Math.PI) * 0.04;
+  // Hip → tail dips then peduncle rises
+  if (u < 0.7) return -0.025 - Math.sin(((u - HIP_U) / 0.32) * Math.PI) * 0.05;
+  return -0.03 + (u - 0.7) * 0.08;
 }
 
 /* ── Soft-body types ───────────────────────────────────────────── */
@@ -307,113 +355,149 @@ function sampleBodyRing(
   const hx = bodyWidthScale(u);
   const cy = spineYOffset(u);
 
-  // Bust: dual-lobe ventral swell (side + front anatomy)
-  let bust = 1;
-  if (u > 0.16 && u < 0.26) {
-    const bu = 1 - Math.abs(u - BUST_U) / 0.06;
-    const ventral = Math.max(0, -Math.sin(a)); // belly side of ring
-    // Two peaks offset left/right of midline for breasts
-    const lat = Math.cos(a);
-    const lobe =
-      Math.exp(-Math.pow((lat - 0.42) * 3.2, 2)) +
-      Math.exp(-Math.pow((lat + 0.42) * 3.2, 2));
-    if (ventral > 0.15 && bu > 0) {
-      bust = 1 + bu * lobe * ventral * 0.55;
+  const sa = Math.sin(a);
+  const ca = Math.cos(a);
+
+  // ── FACE: flatten front slightly, round back of skull
+  let faceFlat = 1;
+  if (u < U_HEAD_END) {
+    // Ventral-front of head (face looks toward −Z is orientation, but ring is radial)
+    // Flatten the "forward" side of face rings: more cheekbone structure
+    if (sa < -0.15) {
+      // face side — slightly push forward features
+      faceFlat = 1.04 + Math.abs(sa) * 0.06;
+    } else if (sa > 0.4) {
+      // occipital roundness
+      faceFlat = 1.02;
+    }
+    // Jaw square-ish superellipse
+    const n = 2.2;
+    const superR = Math.pow(Math.pow(Math.abs(ca), n) + Math.pow(Math.abs(sa), n), 1 / n) || 1;
+    faceFlat *= 0.92 / superR + 0.08;
+  }
+
+  // ── BUST: dual ventral lobes (left/right of midline)
+  let bustX = 1;
+  let bustY = 1;
+  if (u > 0.155 && u < 0.255) {
+    const bu = 1 - Math.abs(u - BUST_U) / 0.055;
+    if (bu > 0) {
+      const ventral = Math.max(0, -sa); // belly half of ring
+      // Peaks offset from midline (~breast centers)
+      const lobe =
+        Math.exp(-Math.pow((ca - 0.48) * 2.8, 2)) +
+        Math.exp(-Math.pow((ca + 0.48) * 2.8, 2));
+      if (ventral > 0.08) {
+        const lift = bu * lobe * ventral;
+        bustY = 1 + lift * 0.72; // project forward/down (ventral)
+        bustX = 1 + lift * 0.28; // slight lateral fullness
+      }
+      // Cleavage midline indent
+      if (Math.abs(ca) < 0.18 && sa < -0.35) {
+        bustY *= 1 - bu * 0.12;
+        bustX *= 1 - bu * 0.08;
+      }
     }
   }
 
-  // Soft underbust crease indent
+  // Underbust crease (sharp indent band)
   let underbust = 1;
-  if (u > 0.24 && u < 0.28 && Math.sin(a) < -0.2) {
-    const t = 1 - Math.abs(u - 0.26) / 0.04;
-    underbust = 1 - t * 0.06 * Math.abs(Math.sin(a));
+  if (u > 0.23 && u < 0.265 && sa < -0.15) {
+    const t = 1 - Math.abs(u - 0.245) / 0.02;
+    underbust = 1 - t * t * 0.1 * Math.abs(sa);
   }
 
-  // Waist pinch
+  // ── WAIST: strong hourglass pinch (esp. sides)
   let waist = 1;
-  if (u > 0.27 && u < 0.34) {
-    const t = 1 - Math.abs(u - WAIST_U) / 0.04;
-    waist = 1 - t * 0.08;
-  }
-
-  // Hip / glute dorsal swell at transition
-  let hip = 1;
-  if (u > 0.35 && u < 0.46) {
-    const t = 1 - Math.abs(u - HIP_U) / 0.06;
-    const dorsal = Math.max(0, Math.sin(a));
-    const lat = Math.abs(Math.cos(a));
-    hip = 1 + t * (dorsal * 0.18 + lat * 0.12);
-  }
-
-  // Navel indent
-  let navel = 1;
-  if (u > 0.31 && u < 0.35 && Math.abs(Math.cos(a)) < 0.25 && Math.sin(a) < -0.6) {
-    navel = 0.88;
-  }
-
-  // Eye socket indents (front of head)
-  let eye = 1;
-  if (u > 0.035 && u < 0.06) {
-    const eu = 1 - Math.abs(u - 0.048) / 0.015;
-    const lat = Math.abs(Math.cos(a));
-    if (lat > 0.45 && lat < 0.85 && Math.abs(Math.sin(a)) < 0.45) {
-      eye = 1 - eu * 0.22;
+  if (u > 0.26 && u < 0.33) {
+    const t = 1 - Math.abs(u - WAIST_U) / 0.035;
+    if (t > 0) {
+      const side = Math.abs(ca);
+      waist = 1 - t * (0.06 + side * 0.1);
     }
   }
 
-  // Nose bridge ridge (front midline of face)
+  // ── HIPS / glutes: dorsal + lateral swell at transition
+  let hip = 1;
+  if (u > 0.33 && u < 0.45) {
+    const t = 1 - Math.abs(u - HIP_U) / 0.07;
+    if (t > 0) {
+      const dorsal = Math.max(0, sa);
+      const lat = Math.abs(ca);
+      hip = 1 + t * (dorsal * 0.22 + lat * 0.16 + Math.max(0, -sa) * 0.06);
+    }
+  }
+
+  // Navel
+  let navel = 1;
+  if (u > 0.3 && u < 0.33 && Math.abs(ca) < 0.22 && sa < -0.55) {
+    navel = 0.86;
+  }
+
+  // ── Eye sockets
+  let eye = 1;
+  if (u > 0.03 && u < 0.055) {
+    const eu = 1 - Math.abs(u - 0.042) / 0.014;
+    const lat = Math.abs(ca);
+    if (lat > 0.35 && lat < 0.8 && Math.abs(sa) < 0.55 && sa < 0.35) {
+      eye = 1 - eu * 0.28 * (lat - 0.3);
+    }
+  }
+
+  // Nose / brow ridge (front midline)
   let nose = 1;
-  if (u > 0.04 && u < 0.07 && Math.abs(Math.cos(a)) < 0.2 && Math.sin(a) < -0.5) {
-    nose = 1.08;
+  if (u > 0.035 && u < 0.065 && Math.abs(ca) < 0.22 && sa < -0.35) {
+    const t = 1 - Math.abs(u - 0.05) / 0.02;
+    nose = 1 + t * 0.1;
   }
 
-  // Scale belt ridge at torso→tail
+  // Chin point
+  let chin = 1;
+  if (u > 0.07 && u < U_HEAD_END && Math.abs(ca) < 0.35 && sa < -0.5) {
+    chin = 1.06;
+  }
+
+  // Scale belt ridge
   let belt = 1;
-  if (u > 0.4 && u < 0.46) {
-    const t = Math.sin(((u - 0.4) / 0.06) * Math.PI);
-    belt = 1 + t * 0.06;
+  if (u > 0.39 && u < 0.46) {
+    const t = Math.sin(((u - 0.39) / 0.07) * Math.PI);
+    belt = 1 + t * 0.08;
   }
 
-  // Dorsal ridge on tail
+  // Tail dorsal ridge / ventral keel
   let ridge = 1;
-  if (u > TORSO_END && Math.sin(a) > 0.75) {
-    ridge = 1 + (Math.sin(a) - 0.75) * 0.2;
+  if (u > TORSO_END) {
+    if (sa > 0.72) ridge = 1 + (sa - 0.72) * 0.28;
+    if (sa < -0.75) ridge = 1 + (-sa - 0.75) * 0.12; // soft ventral keel
   }
 
-  // Soft belly fill (human torso)
+  // Soft belly (human only)
   const belly =
-    u > 0.18 && u < TORSO_END && Math.sin(a) < -0.2
-      ? 0.96 + Math.abs(Math.sin(a)) * 0.05
+    u > U_SHOULDER && u < TORSO_END && sa < -0.15
+      ? 0.97 + Math.abs(sa) * 0.06
       : 1;
 
+  // Shoulder blade dorsal bumps
+  let scapula = 1;
+  if (u > 0.14 && u < 0.19 && sa > 0.35) {
+    const lat = Math.abs(ca);
+    if (lat > 0.25 && lat < 0.85) {
+      scapula = 1 + 0.08 * Math.sin(((u - 0.14) / 0.05) * Math.PI);
+    }
+  }
+
   let px =
-    Math.cos(a) *
-    r *
-    hx *
-    waist *
-    hip *
-    underbust *
-    belt *
-    eye *
-    belly;
+    ca * r * hx * waist * hip * underbust * belt * eye * belly * faceFlat * bustX;
   let py =
-    Math.sin(a) *
-      r *
-      hy *
-      bust *
-      hip *
-      ridge *
-      eye *
-      nose *
-      navel *
-      belly +
+    sa * r * hy * bustY * hip * ridge * eye * nose * chin * navel * belly * scapula +
     cy;
 
-  const noiseAmt = u < HEAD_FREEZE_U ? 0.004 : 0.01;
+  // Micro surface — quieter on face for clean silhouette
+  const noiseAmt = u < HEAD_FREEZE_U ? 0.0025 : u < TORSO_END ? 0.007 : 0.01;
   const n =
     1 +
     Math.sin(a * 7 + u * 15 + seed) * noiseAmt +
-    Math.sin(a * 17 - u * 11) * noiseAmt * 0.55;
+    Math.sin(a * 17 - u * 11) * noiseAmt * 0.5;
 
   return { x: px * n, y: py * n, z, r: r * hy, cy };
 }
@@ -435,16 +519,19 @@ function buildMermaidGeometry(seed: number): {
   const colors: number[] = [];
   const col = new THREE.Color();
 
-  // Non-linear u: denser rings on head + bust + hip transition
+  // Non-linear u: densest on head, bust, waist, hips; even on long tail
   for (let s = 0; s <= spineN; s++) {
     const sNorm = s / spineN;
     let u: number;
-    if (sNorm < 0.18) {
-      u = (sNorm / 0.18) * 0.12; // head density
-    } else if (sNorm < 0.45) {
-      u = 0.12 + ((sNorm - 0.18) / 0.27) * 0.32; // torso/bust/waist/hips
+    if (sNorm < 0.16) {
+      // head + neck (0 → U_NECK_END)
+      u = (sNorm / 0.16) * U_NECK_END;
+    } else if (sNorm < 0.48) {
+      // shoulders → hips (U_NECK_END → TORSO_END)
+      u = U_NECK_END + ((sNorm - 0.16) / 0.32) * (TORSO_END - U_NECK_END);
     } else {
-      u = 0.44 + ((sNorm - 0.45) / 0.55) * 0.56; // long tail
+      // long tail
+      u = TORSO_END + ((sNorm - 0.48) / 0.52) * (1 - TORSO_END);
     }
 
     for (let k = 0; k <= radN; k++) {
@@ -467,11 +554,11 @@ function buildMermaidGeometry(seed: number): {
     }
   }
 
-  // Crown tip
+  // Crown tip (smaller, sits on skull)
   {
     const tip = positions.length / 3;
-    positions.push(0, spineYOffset(0) + 0.12, -len * 0.5 - 0.06);
-    colors.push(0.9, 0.75, 0.68);
+    positions.push(0, spineYOffset(0) + 0.08, -len * 0.5 - 0.04);
+    colors.push(0.92, 0.78, 0.7);
     for (let k = 0; k < radN; k++) {
       indices.push(tip, k + 1, k);
     }
@@ -508,37 +595,41 @@ function buildMermaidGeometry(seed: number): {
     }
   };
 
-  // Large elegant caudal fluke (horizontal lobes, fantasy mermaid)
+  // Large elegant caudal fluke — crescent lobes (classic mermaid side silhouette)
   {
-    const pedZ = len * 0.5 - 0.05;
-    const segs = 36;
-    const halfSpan = 1.55;
+    const pedZ = len * 0.5 - 0.04;
+    const segs = 40;
+    const halfSpan = 1.65;
     for (const side of [-1, 1] as const) {
-      // Leading edge
+      // Leading edge (sweeping crescent)
       const leadStart = tailPos.length / 3;
       for (let i = 0; i <= segs; i++) {
         const t = i / segs;
-        const span = Math.sin(t * Math.PI * 0.92) * halfSpan;
-        const zLead = pedZ + 0.08 + t * 0.65 + Math.sin(t * Math.PI) * 0.12;
-        const yLead = Math.sin(t * Math.PI) * 0.04 * side;
-        tailPos.push(0.03 * side, 0.01, pedZ + t * 0.1);
-        tailPos.push((0.06 + span) * side, yLead, zLead);
+        // Classic mermaid: fluke fans mostly in XY with slight Z depth
+        const span = Math.sin(t * Math.PI * 0.94) * halfSpan;
+        const flare = Math.pow(t, 0.85);
+        const zLead = pedZ + 0.06 + flare * 0.55 + Math.sin(t * Math.PI) * 0.1;
+        // Slight vertical lift of outer tips (crescent)
+        const yLift = Math.sin(t * Math.PI) * 0.18 * (side > 0 ? 0.15 : -0.05);
+        tailPos.push(0.02 * side, 0.0, pedZ + t * 0.08);
+        tailPos.push((0.05 + span) * side, yLift, zLead);
       }
       for (let i = 0; i < segs; i++) {
         const a = leadStart + i * 2;
         tailIdx.push(a, a + 1, a + 2);
         tailIdx.push(a + 2, a + 1, a + 3);
       }
-      // Trailing scalloped edge
+      // Trailing scalloped edge (longer, more dramatic)
       const trailStart = tailPos.length / 3;
       for (let i = 0; i <= segs; i++) {
         const t = i / segs;
-        const span = Math.sin(t * Math.PI * 0.95) * halfSpan * 1.05;
-        const scallop = Math.sin(t * Math.PI * 5) * 0.08 * (1 - t * 0.3);
+        const span = Math.sin(t * Math.PI * 0.96) * halfSpan * 1.12;
+        const scallop = Math.sin(t * Math.PI * 6) * 0.09 * (1 - t * 0.25);
         const zTrail =
-          pedZ + 0.4 + Math.sin(t * Math.PI) * 0.85 + Math.pow(t, 1.5) * 0.2 + scallop;
-        tailPos.push((0.08 + span * 0.4) * side, 0, pedZ + 0.25 + t * 0.2);
-        tailPos.push((0.1 + span) * side, -0.02 + Math.sin(t * Math.PI) * 0.03, zTrail);
+          pedZ + 0.35 + Math.sin(t * Math.PI) * 0.95 + Math.pow(t, 1.4) * 0.25 + scallop;
+        const yTrail = Math.sin(t * Math.PI) * 0.08 * side * 0.2 - 0.02;
+        tailPos.push((0.06 + span * 0.35) * side, 0.0, pedZ + 0.2 + t * 0.18);
+        tailPos.push((0.08 + span) * side, yTrail, zTrail);
       }
       for (let i = 0; i < segs; i++) {
         const a = trailStart + i * 2;
@@ -546,16 +637,16 @@ function buildMermaidGeometry(seed: number): {
         tailIdx.push(a + 2, a + 1, a + 3);
       }
     }
-    // Fluke mid notch connector
+    // Mid notch + peduncle web
     {
-      const segs = 14;
+      const segs = 16;
       const start = tailPos.length / 3;
       for (let i = 0; i <= segs; i++) {
         const t = i / segs;
-        const w = 0.05 + t * 0.1;
-        const z = pedZ + 0.3 + t * 0.7;
-        tailPos.push(-w, 0.008, z);
-        tailPos.push(w, 0.008, z);
+        const w = 0.04 + t * 0.12;
+        const z = pedZ + 0.25 + t * 0.75;
+        tailPos.push(-w, 0.006, z);
+        tailPos.push(w, 0.006, z);
       }
       for (let i = 0; i < segs; i++) {
         const a = start + i * 2;
@@ -565,34 +656,34 @@ function buildMermaidGeometry(seed: number): {
     }
   }
 
-  // Side hip fins (pelvic fin accents from fin reference)
+  // Side hip fins (pelvic) — attach at hip scale belt
   for (const side of [-1, 1] as const) {
+    const rootZ = (HIP_U - 0.5) * len + 0.15;
     pushRibbon(
-      (t) => [0.38 * side, -0.05 - t * 0.02, 0.35 + t * 0.15],
+      (t) => [0.36 * side, -0.04 - t * 0.02, rootZ + t * 0.12],
       (t) => {
-        const span = Math.sin(t * Math.PI * 0.9) * 0.55;
-        return [
-          (0.42 + span) * side,
-          -0.08 - t * 0.35,
-          0.4 + t * 0.55,
-        ];
+        const span = Math.sin(t * Math.PI * 0.9) * 0.62;
+        return [(0.4 + span) * side, -0.06 - t * 0.38, rootZ + 0.08 + t * 0.5];
       },
-      18,
+      20,
     );
   }
 
   // Small dorsal fin mid-tail
-  pushRibbon(
-    (t) => [0, 0.22, 0.9 + t * 0.9],
-    (t) => {
-      let h: number;
-      if (t < 0.35) h = Math.pow(t / 0.35, 0.7);
-      else if (t < 0.55) h = 1 - (t - 0.35) * 0.1;
-      else h = 0.98 * Math.pow(1 - (t - 0.55) / 0.45, 1.3);
-      return [0.01, 0.22 + h * 0.55, 0.9 + t * 0.95 + t * t * 0.15];
-    },
-    22,
-  );
+  {
+    const baseZ = (0.58 - 0.5) * len;
+    pushRibbon(
+      (t) => [0, 0.2, baseZ + t * 0.85],
+      (t) => {
+        let h: number;
+        if (t < 0.32) h = Math.pow(t / 0.32, 0.7);
+        else if (t < 0.55) h = 1 - (t - 0.32) * 0.08;
+        else h = 0.98 * Math.pow(1 - (t - 0.55) / 0.45, 1.3);
+        return [0.01, 0.2 + h * 0.52, baseZ + t * 0.9 + t * t * 0.12];
+      },
+      24,
+    );
+  }
 
   // Scale rows on upper tail (wire detail density)
   for (let row = 0; row < 5; row++) {
@@ -632,33 +723,32 @@ function buildMermaidGeometry(seed: number): {
 
   const hairPos: number[] = [];
   const hairIdx: number[] = [];
-  const hairStrands = 18;
-  const hairSegs = 16;
+  const hairStrands = 22;
+  const hairSegs = 18;
+  const headR = bodyRadius(0.04);
   for (let s = 0; s < hairStrands; s++) {
     const ang = (s / hairStrands) * Math.PI * 2;
-    // Bias strands to back of head (dorsal / +X sides, less face-covering)
-    const backBias = 0.55 + 0.45 * Math.max(0, Math.cos(ang)); // cos>0 → +Z wait
-    // Head at −Z; hair flows toward +Z (back) and outward
-    const rootX = Math.sin(ang) * 0.18 * (0.7 + backBias * 0.3);
-    const rootY = 0.08 + Math.cos(ang * 0.5) * 0.06;
-    const rootZ = -len * 0.5 + 0.15 + Math.cos(ang) * 0.08;
-    // Prefer strands not covering face (more volume on sides/back)
-    if (Math.cos(ang) < -0.55 && Math.abs(Math.sin(ang)) < 0.4) continue;
+    // Head at −Z; face is ventral-front of rings — keep strands off face
+    // Prefer occipital / lateral roots
+    if (Math.cos(ang) < -0.35 && Math.abs(Math.sin(ang)) < 0.45) continue;
+
+    const rootX = Math.sin(ang) * headR * 0.95;
+    const rootY = spineYOffset(0.04) + Math.cos(ang) * headR * 0.55 + 0.04;
+    const rootZ = -len * 0.5 + 0.12 + Math.max(0, Math.cos(ang)) * 0.06;
 
     const start = hairPos.length / 3;
     for (let i = 0; i <= hairSegs; i++) {
       const t = i / hairSegs;
-      const spread = t * t * 0.55;
-      const hang = t * 1.35 + Math.sin(t * Math.PI) * 0.15;
-      const flow = t * 0.95; // toward tail (+Z)
-      const wave = Math.sin(t * 4 + s) * t * 0.12;
-      const x = rootX * (1 + spread) + wave * Math.cos(ang);
-      const y = rootY - hang * 0.35 + Math.sin(t * 3 + seed) * t * 0.08;
-      const z = rootZ + flow + Math.abs(rootX) * t * 0.3;
-      // ribbon width
-      const w = 0.025 * (1 - t * 0.4);
+      const spread = t * t * 0.65;
+      const hang = t * 1.55 + Math.sin(t * Math.PI) * 0.12;
+      const flow = t * 1.15; // toward tail (+Z)
+      const wave = Math.sin(t * 4.2 + s * 0.7) * t * 0.14;
+      const x = rootX * (1 + spread * 0.9) + wave * Math.cos(ang);
+      const y = rootY - hang * 0.42 + Math.sin(t * 3.2 + seed) * t * 0.07;
+      const z = rootZ + flow + Math.abs(rootX) * t * 0.35;
+      const w = 0.022 * (1 - t * 0.45);
       hairPos.push(x - w * Math.cos(ang), y, z);
-      hairPos.push(x + w * Math.cos(ang), y + w * 0.3, z + 0.01);
+      hairPos.push(x + w * Math.cos(ang), y + w * 0.35, z + 0.01);
     }
     for (let i = 0; i < hairSegs; i++) {
       const a = start + i * 2;
@@ -668,16 +758,16 @@ function buildMermaidGeometry(seed: number): {
   }
   // Hair volume cap over crown
   {
-    const segs = 20;
+    const segs = 22;
     const start = hairPos.length / 3;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
       const a = t * Math.PI * 2;
-      hairPos.push(0, 0.14, -len * 0.5 + 0.12);
+      hairPos.push(0, spineYOffset(0) + 0.1, -len * 0.5 + 0.1);
       hairPos.push(
-        Math.sin(a) * 0.22,
-        0.16 + Math.cos(a) * 0.04,
-        -len * 0.5 + 0.12 + Math.cos(a) * 0.08,
+        Math.sin(a) * headR * 1.05,
+        spineYOffset(0) + 0.12 + Math.cos(a) * 0.03,
+        -len * 0.5 + 0.1 + Math.cos(a) * headR * 0.35,
       );
     }
     for (let i = 0; i < segs; i++) {
@@ -692,74 +782,94 @@ function buildMermaidGeometry(seed: number): {
   hair.setIndex(hairIdx);
   hair.computeVertexNormals();
 
-  /* ── Arms ────────────────────────────────────────────────────── */
+  /* ── Arms — attach at shoulder ring, swim pose ───────────────── */
 
   const armPos: number[] = [];
   const armIdx: number[] = [];
-  for (const side of [-1, 1] as const) {
-    // Upper arm → forearm → hand as tapered tubes via ribbons
-    const shoulder: [number, number, number] = [0.42 * side, 0.08, -1.35];
-    const elbow: [number, number, number] = [0.85 * side, -0.15, -0.95];
-    const wrist: [number, number, number] = [1.05 * side, -0.35, -0.45];
-    const hand: [number, number, number] = [1.12 * side, -0.42, -0.2];
+  {
+    const shoulderZ = (U_SHOULDER - 0.5) * len;
+    const shoulderR = bodyRadius(U_SHOULDER) * bodyWidthScale(U_SHOULDER);
+    for (const side of [-1, 1] as const) {
+      // Swim stroke: arms slightly forward and out
+      const shoulder: [number, number, number] = [
+        shoulderR * 0.95 * side,
+        spineYOffset(U_SHOULDER) + 0.04,
+        shoulderZ,
+      ];
+      const elbow: [number, number, number] = [
+        (shoulderR + 0.48) * side,
+        -0.08,
+        shoulderZ + 0.45,
+      ];
+      const wrist: [number, number, number] = [
+        (shoulderR + 0.62) * side,
+        -0.22,
+        shoulderZ + 0.95,
+      ];
+      const hand: [number, number, number] = [
+        (shoulderR + 0.68) * side,
+        -0.28,
+        shoulderZ + 1.22,
+      ];
 
-    const chain = [shoulder, elbow, wrist, hand];
-    for (let seg = 0; seg < chain.length - 1; seg++) {
-      const a0 = chain[seg]!;
-      const a1 = chain[seg + 1]!;
-      const rad0 = seg === 0 ? 0.07 : seg === 1 ? 0.055 : 0.04;
-      const rad1 = seg === 0 ? 0.055 : seg === 1 ? 0.04 : 0.03;
-      const segs = 10;
-      const start = armPos.length / 3;
-      for (let i = 0; i <= segs; i++) {
-        const t = i / segs;
-        const cx = THREE.MathUtils.lerp(a0[0], a1[0], t);
-        const cy = THREE.MathUtils.lerp(a0[1], a1[1], t);
-        const cz = THREE.MathUtils.lerp(a0[2], a1[2], t);
-        const rad = THREE.MathUtils.lerp(rad0, rad1, t);
-        // local "up" ribbon
-        armPos.push(cx, cy + rad, cz);
-        armPos.push(cx, cy - rad, cz);
+      const chain = [shoulder, elbow, wrist, hand];
+      for (let seg = 0; seg < chain.length - 1; seg++) {
+        const a0 = chain[seg]!;
+        const a1 = chain[seg + 1]!;
+        const rad0 = seg === 0 ? 0.065 : seg === 1 ? 0.05 : 0.035;
+        const rad1 = seg === 0 ? 0.05 : seg === 1 ? 0.035 : 0.028;
+        const segs = 12;
+        // Vertical ribbon
+        const start = armPos.length / 3;
+        for (let i = 0; i <= segs; i++) {
+          const t = i / segs;
+          const cx = THREE.MathUtils.lerp(a0[0], a1[0], t);
+          const cy = THREE.MathUtils.lerp(a0[1], a1[1], t);
+          const cz = THREE.MathUtils.lerp(a0[2], a1[2], t);
+          const rad = THREE.MathUtils.lerp(rad0, rad1, t);
+          armPos.push(cx, cy + rad, cz);
+          armPos.push(cx, cy - rad, cz);
+        }
+        for (let i = 0; i < segs; i++) {
+          const a = start + i * 2;
+          armIdx.push(a, a + 1, a + 2);
+          armIdx.push(a + 2, a + 1, a + 3);
+        }
+        // Horizontal thickness ribbon
+        const start2 = armPos.length / 3;
+        for (let i = 0; i <= segs; i++) {
+          const t = i / segs;
+          const cx = THREE.MathUtils.lerp(a0[0], a1[0], t);
+          const cy = THREE.MathUtils.lerp(a0[1], a1[1], t);
+          const cz = THREE.MathUtils.lerp(a0[2], a1[2], t);
+          const rad = THREE.MathUtils.lerp(rad0, rad1, t);
+          armPos.push(cx + rad * 0.75 * side, cy, cz);
+          armPos.push(cx - rad * 0.35 * side, cy, cz + rad * 0.25);
+        }
+        for (let i = 0; i < segs; i++) {
+          const a = start2 + i * 2;
+          armIdx.push(a, a + 1, a + 2);
+          armIdx.push(a + 2, a + 1, a + 3);
+        }
       }
-      for (let i = 0; i < segs; i++) {
-        const a = start + i * 2;
-        armIdx.push(a, a + 1, a + 2);
-        armIdx.push(a + 2, a + 1, a + 3);
-      }
-      // side ribbon for thickness
-      const start2 = armPos.length / 3;
-      for (let i = 0; i <= segs; i++) {
-        const t = i / segs;
-        const cx = THREE.MathUtils.lerp(a0[0], a1[0], t);
-        const cy = THREE.MathUtils.lerp(a0[1], a1[1], t);
-        const cz = THREE.MathUtils.lerp(a0[2], a1[2], t);
-        const rad = THREE.MathUtils.lerp(rad0, rad1, t);
-        armPos.push(cx + rad * 0.7 * side, cy, cz);
-        armPos.push(cx - rad * 0.35 * side, cy, cz + rad * 0.3);
-      }
-      for (let i = 0; i < segs; i++) {
-        const a = start2 + i * 2;
-        armIdx.push(a, a + 1, a + 2);
-        armIdx.push(a + 2, a + 1, a + 3);
-      }
-    }
-    // Simple hand fan (fingers)
-    for (let f = 0; f < 5; f++) {
-      const fa = (f - 2) * 0.18;
-      const segs = 6;
-      const start = armPos.length / 3;
-      for (let i = 0; i <= segs; i++) {
-        const t = i / segs;
-        const x = hand[0] + fa * t * 0.15 * side + t * 0.08 * side;
-        const y = hand[1] - t * 0.02;
-        const z = hand[2] + t * 0.16;
-        armPos.push(x, y + 0.012, z);
-        armPos.push(x, y - 0.012, z);
-      }
-      for (let i = 0; i < segs; i++) {
-        const a = start + i * 2;
-        armIdx.push(a, a + 1, a + 2);
-        armIdx.push(a + 2, a + 1, a + 3);
+      // Fingers
+      for (let f = 0; f < 5; f++) {
+        const fa = (f - 2) * 0.16;
+        const segs = 7;
+        const start = armPos.length / 3;
+        for (let i = 0; i <= segs; i++) {
+          const t = i / segs;
+          const x = hand[0] + fa * t * 0.14 * side + t * 0.06 * side;
+          const y = hand[1] - t * 0.015;
+          const z = hand[2] + t * 0.15;
+          armPos.push(x, y + 0.01, z);
+          armPos.push(x, y - 0.01, z);
+        }
+        for (let i = 0; i < segs; i++) {
+          const a = start + i * 2;
+          armIdx.push(a, a + 1, a + 2);
+          armIdx.push(a + 2, a + 1, a + 3);
+        }
       }
     }
   }
@@ -795,23 +905,31 @@ function buildMermaidGeometry(seed: number): {
     }
   };
 
-  // Eyes
-  for (const side of [-1, 1] as const) {
-    pushRing(side * 0.1, 0.04, -len * 0.5 + 0.28, 0.04, 0.032, 14);
-    pushRing(side * 0.1, 0.04, -len * 0.5 + 0.3, 0.018, 0.016, 10);
+  // Eyes — sit on mid-face rings
+  {
+    const eyeU = 0.042;
+    const eyeZ = (eyeU - 0.5) * len;
+    const eyeY = spineYOffset(eyeU) + 0.02;
+    const eyeX = bodyRadius(eyeU) * bodyWidthScale(eyeU) * 0.55;
+    for (const side of [-1, 1] as const) {
+      pushRing(side * eyeX, eyeY, eyeZ, 0.032, 0.026, 14);
+      pushRing(side * eyeX, eyeY, eyeZ + 0.015, 0.014, 0.012, 10);
+    }
   }
 
   // Lips
   {
     const segs = 16;
     const start = dPos.length / 3;
-    const z = -len * 0.5 + 0.38;
+    const lipU = 0.072;
+    const z = (lipU - 0.5) * len;
+    const y0 = spineYOffset(lipU) - bodyRadius(lipU) * 0.35;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const x = (t - 0.5) * 0.1;
-      const y = -0.04 + Math.sin(t * Math.PI) * 0.012;
+      const x = (t - 0.5) * 0.08;
+      const y = y0 + Math.sin(t * Math.PI) * 0.01;
       dPos.push(x, y, z);
-      dPos.push(x, y - 0.018, z + 0.01);
+      dPos.push(x, y - 0.014, z + 0.008);
     }
     for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
@@ -824,13 +942,14 @@ function buildMermaidGeometry(seed: number): {
   for (const side of [-1, 1] as const) {
     const segs = 12;
     const start = dPos.length / 3;
+    const z0 = (U_NECK_END - 0.5) * len;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const x = side * t * 0.32;
-      const y = 0.12 - t * 0.06;
-      const z = -1.55 + t * 0.15;
+      const x = side * t * bodyRadius(U_SHOULDER) * 0.85;
+      const y = spineYOffset(U_NECK_END) + 0.06 - t * 0.05;
+      const z = z0 + t * 0.12;
       dPos.push(x, y, z);
-      dPos.push(x, y - 0.02, z + 0.02);
+      dPos.push(x, y - 0.018, z + 0.015);
     }
     for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
@@ -839,23 +958,23 @@ function buildMermaidGeometry(seed: number): {
     }
   }
 
-  // Shell / seashell top (tasteful coverage, wireframe)
+  // Shell / seashell top (tasteful coverage, wireframe) — sits on bust
   for (const side of [-1, 1] as const) {
     const segs = 18;
     const start = dPos.length / 3;
-    const cx = side * 0.16;
-    const cy = 0.02;
-    const cz = -1.15;
+    const cx = side * 0.14;
+    const cy = spineYOffset(BUST_U) - 0.02;
+    const cz = (BUST_U - 0.5) * len;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const a = -0.4 + t * (Math.PI + 0.8);
-      const rx = 0.14 + Math.sin(t * Math.PI) * 0.04;
-      const ry = 0.12 + Math.sin(t * Math.PI) * 0.05;
+      const a = -0.45 + t * (Math.PI + 0.9);
+      const rx = 0.13 + Math.sin(t * Math.PI) * 0.045;
+      const ry = 0.11 + Math.sin(t * Math.PI) * 0.05;
       dPos.push(cx, cy, cz);
       dPos.push(
-        cx + Math.cos(a) * rx * side * (side > 0 ? 1 : -1) * 0.15 + Math.sin(a) * rx * 0.3,
-        cy + Math.sin(a) * ry * 0.85,
-        cz + Math.cos(a) * 0.06,
+        cx + Math.sin(a) * rx * 0.55 * side + Math.cos(a) * rx * 0.15,
+        cy + Math.sin(a) * ry * 0.9,
+        cz + Math.cos(a) * 0.05 - 0.02,
       );
     }
     for (let i = 0; i < segs; i++) {
@@ -866,7 +985,17 @@ function buildMermaidGeometry(seed: number): {
   }
 
   // Navel
-  pushRing(0, -0.12, -0.35, 0.025, 0.02, 10);
+  {
+    const navelU = 0.315;
+    pushRing(
+      0,
+      spineYOffset(navelU) - bodyRadius(navelU) * bodyHeightScale(navelU) * 0.55,
+      (navelU - 0.5) * len,
+      0.02,
+      0.016,
+      10,
+    );
+  }
 
   // Hip scale belt decorative V
   {
@@ -906,16 +1035,19 @@ function buildMermaidGeometry(seed: number): {
 
   const aPos: number[] = [];
   const aIdx: number[] = [];
-  // Ear fins (auricle from fin reference)
+  // Ear fins (auricle)
   for (const side of [-1, 1] as const) {
-    const segs = 12;
+    const segs = 14;
     const start = aPos.length / 3;
+    const rootX = bodyRadius(0.05) * bodyWidthScale(0.05) * 0.95 * side;
+    const rootY = spineYOffset(0.05);
+    const rootZ = (0.05 - 0.5) * len;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const x = side * (0.22 + t * 0.18);
-      const y = 0.05 + Math.sin(t * Math.PI) * 0.12;
-      const z = -len * 0.5 + 0.32 + t * 0.05;
-      aPos.push(side * 0.2, 0.05, -len * 0.5 + 0.3);
+      const x = rootX + side * t * 0.16;
+      const y = rootY + Math.sin(t * Math.PI) * 0.1;
+      const z = rootZ + t * 0.04;
+      aPos.push(rootX, rootY, rootZ);
       aPos.push(x, y, z);
     }
     for (let i = 0; i < segs; i++) {
@@ -924,15 +1056,18 @@ function buildMermaidGeometry(seed: number): {
       aIdx.push(a + 2, a + 1, a + 3);
     }
   }
-  // Necklace
+  // Necklace at clavicle
   {
-    const segs = 20;
+    const segs = 22;
     const start = aPos.length / 3;
+    const neckZ = (U_NECK_END - 0.5) * len + 0.04;
+    const neckY = spineYOffset(U_NECK_END) - 0.02;
+    const neckR = bodyRadius(U_NECK_END) * 1.15;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const a = -0.9 + t * 1.8;
-      aPos.push(Math.sin(a) * 0.16, 0.02 + Math.cos(a) * 0.04, -1.48);
-      aPos.push(Math.sin(a) * 0.18, -0.02 + Math.cos(a) * 0.05, -1.46);
+      const a = -1.0 + t * 2.0;
+      aPos.push(Math.sin(a) * neckR, neckY + Math.cos(a) * 0.03, neckZ);
+      aPos.push(Math.sin(a) * (neckR + 0.025), neckY - 0.03 + Math.cos(a) * 0.04, neckZ + 0.02);
     }
     for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
@@ -959,26 +1094,23 @@ function buildSoftLattice(): {
   radial: number;
 } {
   const len = BODY_LEN;
-  const spineCount = 28;
-  const radial = 16;
+  const spineCount = 30;
+  const radial = 18;
   const particles: SoftParticle[] = [];
   const springs: SoftSpring[] = [];
 
   for (let s = 0; s < spineCount; s++) {
     const u = s / (spineCount - 1);
     const z = (u - 0.5) * len;
-    const r = bodyRadius(u) * 0.94;
-    const hy = bodyHeightScale(u);
-    const hx = bodyWidthScale(u);
     const cy = spineYOffset(u);
-    // Pin head solidly; light pin on upper chest for stable bust silhouette
+    // Pin head+neck solid; pin lightly through upper chest so bust silhouette holds
     const pin = u <= HEAD_FREEZE_U;
     particles.push(makeParticle(0, cy, z, pin));
     for (let k = 0; k < radial; k++) {
       const a = (k / radial) * Math.PI * 2;
-      particles.push(
-        makeParticle(Math.cos(a) * r * hx, Math.sin(a) * r * hy + cy, z, pin),
-      );
+      // Use full anatomical sample for rest lattice (bust/hips included)
+      const p = sampleBodyRing(u, a, 0);
+      particles.push(makeParticle(p.x, p.y, p.z, pin));
     }
   }
 
@@ -995,25 +1127,25 @@ function buildSoftLattice(): {
   for (let s = 0; s < spineCount; s++) {
     const base = s * ringSize;
     const u = s / (spineCount - 1);
-    const torsoStiff = u < TORSO_END ? 1.05 : 1;
+    const torsoStiff = u < TORSO_RETAIN_U ? 1.12 : 1;
     for (let k = 0; k < radial; k++) {
-      addSpring(base, base + 1 + k, 0.9 * torsoStiff);
-      addSpring(base + 1 + k, base + 1 + ((k + 1) % radial), 0.82 * torsoStiff);
-      addSpring(base + 1 + k, base + 1 + ((k + 2) % radial), 0.5);
-      addSpring(base + 1 + k, base + 1 + ((k + 3) % radial), 0.34);
+      addSpring(base, base + 1 + k, 0.94 * torsoStiff);
+      addSpring(base + 1 + k, base + 1 + ((k + 1) % radial), 0.88 * torsoStiff);
+      addSpring(base + 1 + k, base + 1 + ((k + 2) % radial), 0.55);
+      addSpring(base + 1 + k, base + 1 + ((k + 3) % radial), 0.38);
     }
     if (s < spineCount - 1) {
       const next = (s + 1) * ringSize;
-      const longStiff = u > 0.65 ? 0.82 : 0.95;
+      const longStiff = u > 0.65 ? 0.8 : u < TORSO_RETAIN_U ? 1.0 : 0.94;
       addSpring(base, next, longStiff);
       for (let k = 0; k < radial; k++) {
-        addSpring(base + 1 + k, next + 1 + k, u > 0.65 ? 0.58 : 0.74);
-        addSpring(base + 1 + k, next + 1 + ((k + 1) % radial), 0.42);
-        addSpring(base + 1 + k, next, 0.38);
+        addSpring(base + 1 + k, next + 1 + k, u > 0.65 ? 0.55 : 0.8);
+        addSpring(base + 1 + k, next + 1 + ((k + 1) % radial), 0.45);
+        addSpring(base + 1 + k, next, 0.4);
       }
     }
     if (s < spineCount - 2) {
-      addSpring(base, (s + 2) * ringSize, 0.55);
+      addSpring(base, (s + 2) * ringSize, 0.58);
     }
   }
 
@@ -1240,39 +1372,35 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
   const ringSize = 1 + m.radial;
   const damp = Math.pow(0.91, dt * 60);
 
-  // Lateral undulation stronger toward tail (fish drive); hair gets lag via springs
+  // Lateral undulation — minimal through torso, strong on tail only
   for (let s = 0; s < m.spineCount; s++) {
     const u = s / (m.spineCount - 1);
     if (u <= HEAD_FREEZE_U) continue;
 
-    // Soft torso sway (gentle); strong tail wave
+    // Nearly zero wave on torso so hourglass silhouette stays readable
     const tailWeight =
-      u < TORSO_END
-        ? 0.15 * ((u - HEAD_FREEZE_U) / (TORSO_END - HEAD_FREEZE_U))
-        : 0.15 +
-          Math.pow((u - TORSO_END) / (1 - TORSO_END), 1.55) * 1.75;
+      u < TORSO_RETAIN_U
+        ? 0.04 * ((u - HEAD_FREEZE_U) / Math.max(1e-6, TORSO_RETAIN_U - HEAD_FREEZE_U))
+        : 0.08 +
+          Math.pow((u - TORSO_RETAIN_U) / (1 - TORSO_RETAIN_U), 1.55) * 1.85;
 
     const wave =
-      Math.sin(u * 3.8 - t * 5.8 + m.phase) * swimAmp * (0.1 + tailWeight);
+      Math.sin(u * 3.8 - t * 5.8 + m.phase) * swimAmp * (0.08 + tailWeight);
     const base = s * ringSize;
     const p = particles[base]!;
-    if (!p.pinned) p.x += wave * dt * 2.6;
+    if (!p.pinned) p.x += wave * dt * 2.5;
     for (let k = 0; k < m.radial; k++) {
       const q = particles[base + 1 + k]!;
       if (q.pinned) continue;
-      q.x += wave * dt * 2.3;
-      // Soft breast / torso jiggle (small vertical) — soft-body feel
-      if (u > 0.16 && u < 0.28) {
+      q.x += wave * dt * 2.2;
+      // Subtle soft-body jiggle on bust (very small)
+      if (u > 0.16 && u < 0.26) {
         q.y +=
-          Math.sin(t * 6.5 + m.phase + u * 4) *
+          Math.sin(t * 5.8 + m.phase + u * 4) *
           swimAmp *
-          0.08 *
+          0.04 *
           dt *
-          (m.speed * 0.15 + 0.4);
-      }
-      // Hair-region root sway on upper rings
-      if (u < 0.2) {
-        q.x += Math.sin(t * 3.2 + m.phase * 1.3) * swimAmp * 0.05 * dt;
+          (m.speed * 0.12 + 0.3);
       }
     }
   }
@@ -1317,15 +1445,20 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
     for (let s = 0; s < m.spineCount; s++) {
       const u = s / (m.spineCount - 1);
       const z = (u - 0.5) * BODY_LEN;
-      const r = bodyRadius(u) * 0.94;
-      const hy = bodyHeightScale(u);
-      const hx = bodyWidthScale(u);
       const cy = spineYOffset(u);
       const base = s * ringSize;
       const center = particles[base]!;
-      // Strong shape retention on head/torso for anatomy; soft on tail
+      // Strong shape retention on head/torso so anatomy stays readable
       const retain =
-        u <= HEAD_FREEZE_U ? 0.5 : u < TORSO_END ? 0.12 : u > 0.8 ? 0.04 : 0.07;
+        u <= HEAD_FREEZE_U
+          ? 0.55
+          : u < TORSO_RETAIN_U
+            ? 0.18
+            : u < TORSO_END
+              ? 0.1
+              : u > 0.8
+                ? 0.04
+                : 0.06;
       if (!center.pinned) {
         center.x += (0 - center.x) * retain;
         center.y += (cy - center.y) * retain;
@@ -1338,30 +1471,24 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
       for (let k = 0; k < m.radial; k++) {
         const a = (k / m.radial) * Math.PI * 2;
         const q = particles[base + 1 + k]!;
-        // Rest pose with bust/hip shaping (match sampleBodyRing lightly)
-        let rx = Math.cos(a) * r * hx;
-        let ry = Math.sin(a) * r * hy + cy;
-        if (u > 0.16 && u < 0.26 && Math.sin(a) < -0.15) {
-          const lat = Math.cos(a);
-          const lobe =
-            Math.exp(-Math.pow((lat - 0.42) * 3.2, 2)) +
-            Math.exp(-Math.pow((lat + 0.42) * 3.2, 2));
-          const bu = 1 - Math.abs(u - BUST_U) / 0.06;
-          if (bu > 0) {
-            const f = 1 + bu * lobe * Math.max(0, -Math.sin(a)) * 0.45;
-            rx *= f;
-            ry = (ry - cy) * f + cy;
-          }
-        }
+        // Rest pose from full anatomical sample (bust, hips, waist)
+        const rest = sampleBodyRing(u, a, 0);
         if (q.pinned) {
-          q.x = rx;
-          q.y = ry;
-          q.z = z;
+          q.x = rest.x;
+          q.y = rest.y;
+          q.z = rest.z;
         } else {
-          const rs = u <= HEAD_FREEZE_U ? 0.22 : u < TORSO_END ? 0.09 : 0.05;
-          q.x += (rx - q.x) * rs;
-          q.y += (ry - q.y) * rs;
-          q.z += (z - q.z) * rs;
+          const rs =
+            u <= HEAD_FREEZE_U
+              ? 0.28
+              : u < TORSO_RETAIN_U
+                ? 0.14
+                : u < TORSO_END
+                  ? 0.08
+                  : 0.045;
+          q.x += (rest.x - q.x) * rs;
+          q.y += (rest.y - q.y) * rs;
+          q.z += (rest.z - q.z) * rs;
         }
       }
     }
