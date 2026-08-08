@@ -1,0 +1,268 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --color-bg: #071018;
+  --color-surface: #0c1a24;
+  --color-fg: #e8f4f2;
+  --color-muted: #8ab0aa;
+  --color-accent: #7fe3d4;
+  --color-accent-warm: #f0b4a0;
+  --color-clock: #b8fff0;
+  --color-clock-dim: #7ab8ae;
+  --color-border: color-mix(in oklab, var(--color-fg) 14%, transparent);
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --font-mono: "SF Mono", "Cascadia Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --motion-quick: 150ms;
+  --motion-fast: 250ms;
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    margin: 0;
+    min-height: 100%;
+    height: 100%;
+  }
+
+  html {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+.app-shell {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  background: radial-gradient(ellipse 120% 90% at 50% 20%, #123040 0%, #071018 55%, #050c12 100%);
+  overflow: hidden;
+}
+
+.canvas-host {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-host canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  touch-action: none;
+}
+
+.clock-dock {
+  position: absolute;
+  z-index: 10;
+  top: max(var(--space-4), env(safe-area-inset-top, 0px));
+  right: max(var(--space-4), env(safe-area-inset-right, 0px));
+  pointer-events: auto;
+}
+
+.clock-btn {
+  appearance: none;
+  border: 1px solid color-mix(in oklab, var(--color-accent) 32%, transparent);
+  background: color-mix(in oklab, var(--color-surface) 80%, transparent);
+  color: var(--color-clock);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  border-radius: var(--radius-md);
+  padding: clamp(0.75rem, 1.4vw, 1rem) clamp(0.9rem, 1.8vw, 1.25rem);
+  min-width: clamp(11.5rem, 20vw, 14.5rem);
+  min-height: 56px;
+  text-align: right;
+  line-height: 1.1;
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, #000 35%, transparent),
+    0 10px 32px color-mix(in oklab, #000 38%, transparent),
+    0 0 28px color-mix(in oklab, var(--color-accent) 14%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition:
+    opacity var(--motion-fast) var(--ease-smooth),
+    transform var(--motion-quick) var(--ease-smooth),
+    border-color var(--motion-fast) var(--ease-smooth),
+    box-shadow var(--motion-fast) var(--ease-smooth);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.clock-btn:hover {
+  border-color: color-mix(in oklab, var(--color-accent) 52%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, #000 35%, transparent),
+    0 12px 36px color-mix(in oklab, #000 42%, transparent),
+    0 0 32px color-mix(in oklab, var(--color-accent) 20%, transparent);
+}
+
+.clock-btn:active {
+  transform: scale(0.98);
+}
+
+.clock-btn[data-mode="hidden"] {
+  opacity: 0.32;
+  min-width: 52px;
+  min-height: 52px;
+  padding: var(--space-3);
+  border-color: color-mix(in oklab, var(--color-accent) 16%, transparent);
+  box-shadow: none;
+}
+
+.clock-date {
+  display: block;
+  font-size: clamp(0.9rem, 0.78rem + 0.55vw, 1.1rem);
+  color: var(--color-clock-dim);
+  font-weight: 500;
+  margin-bottom: 0.15em;
+  letter-spacing: 0.14em;
+}
+
+.clock-time {
+  display: block;
+  font-size: clamp(1.55rem, 1.2rem + 1.4vw, 2.2rem);
+  font-weight: 500;
+  text-shadow: 0 0 16px color-mix(in oklab, var(--color-accent) 50%, transparent);
+  letter-spacing: 0.06em;
+  margin-bottom: 0.55em;
+}
+
+.clock-cal {
+  display: block;
+  width: 100%;
+  text-align: center;
+  border-top: 1px solid color-mix(in oklab, var(--color-accent) 18%, transparent);
+  padding-top: 0.55em;
+  margin-top: 0.1em;
+}
+
+.clock-cal-week,
+.clock-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.1em 0.15em;
+  width: 100%;
+}
+
+.clock-cal-week {
+  margin-bottom: 0.2em;
+}
+
+.clock-cal-dow {
+  font-size: clamp(0.55rem, 0.48rem + 0.25vw, 0.68rem);
+  color: color-mix(in oklab, var(--color-clock-dim) 70%, transparent);
+  letter-spacing: 0.04em;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.clock-cal-cell {
+  font-size: clamp(0.62rem, 0.55rem + 0.3vw, 0.78rem);
+  color: var(--color-clock-dim);
+  line-height: 1.55;
+  letter-spacing: 0;
+  border-radius: 4px;
+  min-height: 1.45em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.clock-cal-cell.is-empty {
+  visibility: hidden;
+}
+
+.clock-cal-cell.is-today {
+  color: var(--color-bg);
+  background: var(--color-accent);
+  font-weight: 600;
+  box-shadow: 0 0 10px color-mix(in oklab, var(--color-accent) 55%, transparent);
+}
+
+.clock-dot {
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: var(--color-accent);
+  box-shadow: 0 0 12px color-mix(in oklab, var(--color-accent) 70%, transparent);
+  opacity: 0.9;
+}
+
+@media (orientation: landscape) and (max-height: 480px) {
+  .clock-dock {
+    top: max(var(--space-2), env(safe-area-inset-top, 0px));
+    right: max(var(--space-3), env(safe-area-inset-right, 0px));
+  }
+
+  .clock-btn {
+    padding: 0.55rem 0.85rem;
+    min-width: 10rem;
+  }
+
+  .clock-date {
+    font-size: 0.8rem;
+  }
+
+  .clock-time {
+    font-size: 1.35rem;
+    margin-bottom: 0.4em;
+  }
+
+  .clock-cal-cell {
+    font-size: 0.58rem;
+    min-height: 1.25em;
+  }
+}
+
+@media (max-width: 390px) {
+  .clock-btn {
+    min-width: 10.25rem;
+  }
+
+  .clock-time {
+    font-size: 1.45rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clock-btn {
+    transition: none;
+  }
+}
