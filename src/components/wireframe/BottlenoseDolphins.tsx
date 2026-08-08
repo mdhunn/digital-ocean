@@ -8,27 +8,27 @@ import {
 
 /**
  * High-polygon bottlenose dolphins (Tursiops truncatus).
- * Anatomy from multi-angle refs: side profile, dorsal/top, ventral belly, frontal.
+ * Anatomy refined from multi-angle refs (side, dorsal, ventral, frontal):
  *
- * Key anatomy (vs shark):
- *  - Elongated rostrum (beak) + bulbous melon forehead
- *  - Blowhole on dorsal cranial surface
- *  - Single falcate dorsal fin mid-back
- *  - Pectoral flippers; no 2nd dorsal / anal
- *  - Horizontal flukes (not vertical caudal) — carangiform DORSOVENTRAL swim
- *  - Countershaded slate-grey dorsal / pale ventral
+ * Proportions (u along body, snout→fluke):
+ *  0.00–0.14  elongated rostrum (beak), dorsoventrally flattened
+ *  0.14–0.24  melon forehead + cranium, blowhole on dorsal
+ *  0.24–0.36  cervical / pectoral root (flippers)
+ *  0.36–0.55  max girth midbody; falcate dorsal base ~0.42–0.55
+ *  0.55–0.78  gradual taper
+ *  0.78–0.96  caudal peduncle (laterally compressed for fluke stroke)
+ *  0.96–1.00  fluke insertion + horizontal crescent flukes
  *
- * Behavior: friendly + curious about cursor; alarm/flee when sharks hunt nearby.
- * Soft-body Verlet + springs; swim faster than great whites.
+ * Soft-body Verlet + springs; dorsoventral swim; curious / flee sharks.
  */
 
 const SURFACE_Y = 12;
 const SEABED_Y = -1.5;
 const DOLPHIN_COUNT = 4;
-const SPINE_LEN = 42;
-const RADIAL = 36;
+const SPINE_LEN = 52;
+const RADIAL = 40;
 const SOFT_ITERS = 4;
-const BODY_LEN = 5.2;
+const BODY_LEN = 5.4;
 
 /* ── wireframe materials ───────────────────────────────────────── */
 
@@ -41,28 +41,28 @@ const BODY_MAT = new THREE.MeshBasicMaterial({
 });
 
 const FIN_MAT = new THREE.MeshBasicMaterial({
-  color: new THREE.Color("#8aa0b0"),
+  color: new THREE.Color("#7a929e"),
   wireframe: true,
   transparent: true,
-  opacity: 0.95,
+  opacity: 0.96,
   depthWrite: false,
   side: THREE.DoubleSide,
 });
 
 const DETAIL_MAT = new THREE.MeshBasicMaterial({
-  color: new THREE.Color("#c8dce8"),
+  color: new THREE.Color("#c4d8e4"),
   wireframe: true,
   transparent: true,
-  opacity: 0.92,
+  opacity: 0.93,
   depthWrite: false,
   side: THREE.DoubleSide,
 });
 
 const FLUKE_MAT = new THREE.MeshBasicMaterial({
-  color: new THREE.Color("#9ab0bc"),
+  color: new THREE.Color("#8aa0ac"),
   wireframe: true,
   transparent: true,
-  opacity: 0.96,
+  opacity: 0.97,
   depthWrite: false,
   side: THREE.DoubleSide,
 });
@@ -72,40 +72,62 @@ function seeded(n: number) {
   return x - Math.floor(x);
 }
 
-/* ── Anatomical body profile (bottlenose) ────────────────────────
- * Side: long beak, melon forehead, deep midbody, slim peduncle, flukes.
- * Top:  spindle, mid dorsal fin, wide flukes at tip.
- * Bottom: pale belly, pectoral flippers, genital slit mid-ventral.
- * Front: beak tip, melon dome, eyes lateral, smile crease.
- * u: 0 = rostrum tip → 1 = fluke base
+/* ── Anatomical profile (Tursiops) ───────────────────────────────
+ * Base radius follows fusiform hydrodynamics; height/width scales
+ * reshape cross-section: flat beak, round melon, tall peduncle.
  */
 
 function bodyRadius(u: number): number {
-  if (u < 0.08) return 0.02 + u * 1.15;
-  if (u < 0.16) return 0.112 + (u - 0.08) * 4.8;
-  if (u < 0.26) return 0.496 + (u - 0.16) * 1.9;
-  if (u < 0.42) return 0.686 + (u - 0.26) * 0.55;
-  if (u < 0.55) return 0.774 - (u - 0.42) * 0.4;
-  if (u < 0.72) return 0.722 - (u - 0.55) * 1.55;
-  if (u < 0.88) return 0.458 - (u - 0.72) * 1.65;
-  return 0.194 - (u - 0.88) * 0.55;
+  // Long slender beak
+  if (u < 0.04) return 0.018 + u * 0.55;
+  if (u < 0.1) return 0.04 + (u - 0.04) * 0.95;
+  if (u < 0.14) return 0.097 + (u - 0.1) * 2.1;
+  // Melon / head swell (not as fat as midbody)
+  if (u < 0.2) return 0.181 + (u - 0.14) * 4.6;
+  if (u < 0.28) return 0.457 + (u - 0.2) * 2.35;
+  // Shoulder → max girth just ahead of dorsal
+  if (u < 0.4) return 0.645 + (u - 0.28) * 1.05;
+  if (u < 0.5) return 0.771 + (u - 0.4) * 0.18;
+  // Peak ~0.48–0.5 then slow taper
+  if (u < 0.62) return 0.789 - (u - 0.5) * 0.55;
+  if (u < 0.75) return 0.723 - (u - 0.62) * 1.45;
+  // Peduncle slim
+  if (u < 0.88) return 0.534 - (u - 0.75) * 2.05;
+  if (u < 0.96) return 0.268 - (u - 0.88) * 1.35;
+  return 0.16 - (u - 0.96) * 0.9;
 }
 
+/** Vertical ellipse — beak flat, mid tall, peduncle tall for fluke power */
 function bodyHeightScale(u: number): number {
-  if (u < 0.1) return 0.65 + u * 2.2;
-  if (u < 0.2) return 0.87 + (u - 0.1) * 1.4;
-  if (u < 0.45) return 1.01 + (u - 0.2) * 0.28;
-  if (u < 0.65) return 1.08;
-  if (u < 0.85) return 1.08 - (u - 0.65) * 0.7;
-  return 0.94 - (u - 0.85) * 0.55;
+  if (u < 0.12) return 0.52 + u * 2.8; // dorsoventrally flattened rostrum
+  if (u < 0.18) return 0.856 + (u - 0.12) * 2.6; // melon rises
+  if (u < 0.28) return 1.012 + (u - 0.18) * 0.55;
+  if (u < 0.5) return 1.067 + (u - 0.28) * 0.22;
+  if (u < 0.7) return 1.115 - (u - 0.5) * 0.15;
+  if (u < 0.88) return 1.085 + (u - 0.7) * 0.35; // peduncle gets taller relatively
+  return 1.148 + (u - 0.88) * 0.4;
 }
 
+/** Lateral width — beak narrow, mid full, peduncle compressed */
 function bodyWidthScale(u: number): number {
-  if (u < 0.12) return 0.55 + u * 2.5;
-  if (u < 0.35) return 0.85 + (u - 0.12) * 0.55;
-  if (u < 0.6) return 0.976;
-  if (u < 0.85) return 0.976 - (u - 0.6) * 0.55;
-  return 0.838 - (u - 0.85) * 0.6;
+  if (u < 0.12) return 0.72 + u * 1.4;
+  if (u < 0.22) return 0.888 + (u - 0.12) * 0.7;
+  if (u < 0.4) return 0.958 + (u - 0.22) * 0.15;
+  if (u < 0.55) return 0.985;
+  if (u < 0.75) return 0.985 - (u - 0.55) * 0.55;
+  if (u < 0.9) return 0.875 - (u - 0.75) * 1.4; // lateral compression
+  return 0.665 - (u - 0.9) * 1.2;
+}
+
+/** Spine centerline Y offset — slight melon rise, chin, peduncle dip */
+function spineYOffset(u: number): number {
+  // Melon dome lifts dorsal midline
+  const melon = u > 0.12 && u < 0.26 ? Math.sin(((u - 0.12) / 0.14) * Math.PI) * 0.07 : 0;
+  // Slight belly sag midbody (natural underwater posture)
+  const belly = u > 0.28 && u < 0.7 ? -Math.sin(((u - 0.28) / 0.42) * Math.PI) * 0.035 : 0;
+  // Peduncle slightly rises into fluke
+  const ped = u > 0.8 ? (u - 0.8) * 0.06 : 0;
+  return melon + belly + ped;
 }
 
 /* ── Soft-body types ───────────────────────────────────────────── */
@@ -172,22 +194,37 @@ const SHARK_ALARM_RANGE = 11;
 const SHARK_PANIC_RANGE = 6.5;
 const CURIOUS_RANGE = 14;
 
-/* ── High-poly body geometry ───────────────────────────────────── */
+/* ── Countershading + cape cape ────────────────────────────────── */
 
-function countershadeColor(y: number, r: number, out: THREE.Color) {
-  const ny = y / Math.max(r, 0.05);
-  if (ny < -0.18) {
-    out.setRGB(0.88, 0.9, 0.92);
-  } else if (ny < 0.05) {
-    const t = (ny + 0.18) / 0.23;
-    out.setRGB(0.88 - t * 0.22, 0.9 - t * 0.18, 0.92 - t * 0.14);
-  } else if (ny < 0.4) {
-    const t = (ny - 0.05) / 0.35;
-    out.setRGB(0.66 - t * 0.18, 0.72 - t * 0.14, 0.78 - t * 0.12);
+function countershadeColor(y: number, r: number, u: number, out: THREE.Color) {
+  const ny = y / Math.max(r, 0.04);
+  // Classic bottlenose: dark dorsal cape, medium flank, pale pink-white belly
+  if (ny < -0.22) {
+    out.setRGB(0.9, 0.91, 0.93);
+  } else if (ny < -0.02) {
+    const t = (ny + 0.22) / 0.2;
+    out.setRGB(0.9 - t * 0.2, 0.91 - t * 0.16, 0.93 - t * 0.12);
+  } else if (ny < 0.28) {
+    const t = (ny + 0.02) / 0.3;
+    out.setRGB(0.7 - t * 0.16, 0.76 - t * 0.14, 0.82 - t * 0.12);
+  } else if (ny < 0.55) {
+    const t = (ny - 0.28) / 0.27;
+    out.setRGB(0.54 - t * 0.12, 0.62 - t * 0.1, 0.7 - t * 0.1);
   } else {
-    out.setRGB(0.42, 0.52, 0.6);
+    // Dorsal cape — darker slate
+    out.setRGB(0.36, 0.44, 0.52);
+  }
+  // Slightly lighter rostrum tip / chin
+  if (u < 0.12) {
+    out.lerp(new THREE.Color(0.78, 0.82, 0.86), 0.28);
+  }
+  // Darker dorsal fin region cape
+  if (u > 0.38 && u < 0.58 && ny > 0.35) {
+    out.lerp(new THREE.Color(0.3, 0.38, 0.46), 0.25);
   }
 }
+
+/* ── High-poly body geometry ───────────────────────────────────── */
 
 function buildDolphinGeometry(seed: number): {
   body: THREE.BufferGeometry;
@@ -208,26 +245,81 @@ function buildDolphinGeometry(seed: number): {
     const r = bodyRadius(u);
     const hy = bodyHeightScale(u);
     const hx = bodyWidthScale(u);
+    const cy = spineYOffset(u);
+
     for (let k = 0; k <= radN; k++) {
       const a = (k / radN) * Math.PI * 2;
-      const melon =
-        u > 0.06 && u < 0.2 && a > 0.2 && a < Math.PI - 0.2
-          ? 1 + Math.sin(((u - 0.06) / 0.14) * Math.PI) * Math.sin(a) * 0.18
-          : 1;
-      const beakFlat = u < 0.1 ? 0.72 + u * 2.2 : 1;
+      // Angle: 0 = +X (right), π/2 = +Y (dorsal), π = −X, 3π/2 = −Y (ventral)
+
+      // Melon: bulbous forehead (dorsal only, u ~0.12–0.24)
+      let melon = 1;
+      if (u > 0.11 && u < 0.26) {
+        const mu = (u - 0.11) / 0.15;
+        const dorsal = Math.max(0, Math.sin(a)); // upper half
+        melon = 1 + Math.sin(mu * Math.PI) * dorsal * dorsal * 0.32;
+      }
+
+      // Chin / lower jaw pad under beak
+      let chin = 1;
+      if (u > 0.02 && u < 0.14 && Math.sin(a) < -0.2) {
+        const cu = (u - 0.02) / 0.12;
+        chin = 1 + Math.sin(cu * Math.PI) * Math.abs(Math.sin(a)) * 0.12;
+      }
+
+      // Rostrum: more rectangular cross-section (flatten top & bottom)
+      let beakShape = 1;
+      if (u < 0.13) {
+        const flat = Math.pow(Math.abs(Math.sin(a)), 0.65);
+        beakShape = 0.72 + flat * 0.35;
+      }
+
+      // Soft rounded belly (ventral fill)
       const belly =
-        a > Math.PI && a < Math.PI * 2 ? 0.9 + Math.sin(a) * 0.03 : 1;
-      const ridge =
-        a > 0.5 && a < Math.PI - 0.5 ? 1 + Math.cos(a) * 0.03 : 1;
-      const px = Math.cos(a) * r * hx * belly;
-      const py = Math.sin(a) * r * hy * melon * beakFlat * ridge;
+        Math.sin(a) < -0.15
+          ? 0.92 + Math.abs(Math.sin(a)) * 0.05
+          : 1;
+
+      // Subtle dorsal ridge from midbody through peduncle
+      let ridge = 1;
+      if (u > 0.3 && Math.sin(a) > 0.75) {
+        ridge = 1 + (Math.sin(a) - 0.75) * 0.14;
+      }
+
+      // Eye socket indent (lateral, just behind gape)
+      let eyeSocket = 1;
+      if (u > 0.16 && u < 0.22) {
+        const eu = Math.abs(u - 0.19) / 0.03;
+        const lat = Math.abs(Math.cos(a));
+        if (lat > 0.7 && Math.abs(Math.sin(a)) < 0.45) {
+          eyeSocket = 1 - (1 - eu) * (lat - 0.7) * 0.35;
+        }
+      }
+
+      // Flipper root bulge (lateral, u ~0.28)
+      let flipperRoot = 1;
+      if (u > 0.25 && u < 0.34) {
+        const fu = 1 - Math.abs(u - 0.29) / 0.05;
+        const lat = Math.abs(Math.cos(a));
+        if (lat > 0.55 && Math.sin(a) < 0.2) {
+          flipperRoot = 1 + fu * (lat - 0.55) * 0.22;
+        }
+      }
+
+      const px =
+        Math.cos(a) * r * hx * belly * beakShape * eyeSocket * flipperRoot;
+      const py =
+        Math.sin(a) * r * hy * melon * chin * ridge * beakShape * eyeSocket +
+        cy;
+
+      // Micro organic noise (high-poly feel)
       const n =
         1 +
-        Math.sin(a * 5 + u * 11 + seed) * 0.01 +
-        Math.sin(a * 13 - u * 8) * 0.006;
+        Math.sin(a * 6 + u * 13 + seed) * 0.008 +
+        Math.sin(a * 15 - u * 9) * 0.005 +
+        Math.cos(a * 3 + u * 7) * 0.004;
+
       positions.push(px * n, py * n, z);
-      countershadeColor(py, r * hy, col);
-      if (u < 0.1) col.lerp(new THREE.Color("#d0d8e0"), 0.35);
+      countershadeColor(py - cy, r * hy, u, col);
       colors.push(col.r, col.g, col.b);
     }
   }
@@ -243,11 +335,27 @@ function buildDolphinGeometry(seed: number): {
     }
   }
 
+  // Rostrum tip — slightly downturned (real bottlenose beak tip)
   const tip = positions.length / 3;
-  positions.push(0, -0.01, -len * 0.5 - 0.22);
-  colors.push(0.82, 0.86, 0.9);
+  positions.push(0, -0.03, -len * 0.5 - 0.28);
+  colors.push(0.8, 0.84, 0.88);
   for (let k = 0; k < radN; k++) {
     indices.push(tip, k + 1, k);
+  }
+
+  // Snout tip ring fill for rounded beak end
+  const tipRing = positions.length / 3;
+  for (let k = 0; k < radN; k++) {
+    const a = (k / radN) * Math.PI * 2;
+    positions.push(
+      Math.cos(a) * 0.035,
+      Math.sin(a) * 0.022 - 0.02,
+      -len * 0.5 - 0.12,
+    );
+    colors.push(0.78, 0.82, 0.86);
+  }
+  for (let k = 0; k < radN; k++) {
+    indices.push(tip, tipRing + k, tipRing + ((k + 1) % radN));
   }
 
   const body = new THREE.BufferGeometry();
@@ -256,85 +364,162 @@ function buildDolphinGeometry(seed: number): {
   body.setIndex(indices);
   body.computeVertexNormals();
 
+  /* ── Fins: falcate dorsal + sickle pectorals ──────────────────── */
+
   const finPos: number[] = [];
   const finIdx: number[] = [];
 
-  // Dorsal fin — falcate, mid-body
-  {
-    const segs = 22;
-    const baseZ0 = -0.05;
-    const baseZ1 = 1.05;
-    const baseY = 0.55;
-    const height = 0.95;
+  const pushRibbon = (
+    root: (t: number) => [number, number, number],
+    tipFn: (t: number) => [number, number, number],
+    segs: number,
+  ) => {
     const start = finPos.length / 3;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const z = THREE.MathUtils.lerp(baseZ0, baseZ1, t);
-      const edge =
-        t < 0.38
-          ? Math.pow(t / 0.38, 0.75)
-          : Math.pow(1 - (t - 0.38) / 0.62, 1.25);
-      const tipLean = t * 0.18;
-      finPos.push(0, baseY, z);
-      finPos.push(0.025, baseY + height * edge, z + tipLean);
+      const [rx, ry, rz] = root(t);
+      const [tx, ty, tz] = tipFn(t);
+      finPos.push(rx, ry, rz);
+      finPos.push(tx, ty, tz);
     }
     for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
       finIdx.push(a, a + 1, a + 2);
       finIdx.push(a + 2, a + 1, a + 3);
     }
-    const mid = finPos.length / 3;
-    for (let i = 0; i <= segs; i++) {
-      const t = i / segs;
-      const z = THREE.MathUtils.lerp(baseZ0, baseZ1, t);
-      const edge =
-        t < 0.38
-          ? Math.pow(t / 0.38, 0.75)
-          : Math.pow(1 - (t - 0.38) / 0.62, 1.25);
-      finPos.push(0.04, baseY + 0.05, z);
-      finPos.push(0.02, baseY + height * edge * 0.7, z + t * 0.12);
-    }
-    for (let i = 0; i < segs; i++) {
-      const a = mid + i * 2;
-      finIdx.push(a, a + 1, a + 2);
-      finIdx.push(a + 2, a + 1, a + 3);
-    }
+  };
+
+  // Dorsal fin — tall falcate, mid-back (refs: curved trailing edge, tip aft)
+  // Base sits on body surface ~ y=0.55–0.62 at u~0.42–0.55 → z ≈ (u-0.5)*len
+  {
+    const baseZ0 = -0.2; // leading root
+    const baseZ1 = 0.95; // trailing root
+    const baseY = 0.58;
+    const height = 1.05;
+    const segs = 28;
+
+    // Outer silhouette
+    pushRibbon(
+      (t) => {
+        const z = THREE.MathUtils.lerp(baseZ0, baseZ1, t);
+        // Base follows slight body curve
+        const yBase = baseY - Math.sin(t * Math.PI) * 0.04;
+        return [0, yBase, z];
+      },
+      (t) => {
+        // Falcate profile: steep leading, concave trailing, tip leans aft
+        let edge: number;
+        if (t < 0.32) {
+          edge = Math.pow(t / 0.32, 0.72);
+        } else if (t < 0.55) {
+          edge = 1 - (t - 0.32) * 0.08;
+        } else {
+          edge = 0.978 * Math.pow(1 - (t - 0.55) / 0.45, 1.35);
+        }
+        const tipLean = Math.pow(t, 1.1) * 0.32; // tip points aft
+        const z = THREE.MathUtils.lerp(baseZ0, baseZ1, t) + tipLean;
+        const y = baseY + height * edge;
+        // Slight thickness
+        return [0.018, y, z];
+      },
+      segs,
+    );
+
+    // Mid thickness membrane (high-poly)
+    pushRibbon(
+      (t) => {
+        const z = THREE.MathUtils.lerp(baseZ0, baseZ1, t);
+        return [0.04, baseY + 0.06, z];
+      },
+      (t) => {
+        let edge: number;
+        if (t < 0.32) edge = Math.pow(t / 0.32, 0.72);
+        else if (t < 0.55) edge = 1 - (t - 0.32) * 0.08;
+        else edge = 0.978 * Math.pow(1 - (t - 0.55) / 0.45, 1.35);
+        const tipLean = Math.pow(t, 1.1) * 0.28;
+        return [
+          0.012,
+          baseY + height * edge * 0.72,
+          THREE.MathUtils.lerp(baseZ0, baseZ1, t) + tipLean,
+        ];
+      },
+      segs,
+    );
+
+    // Leading-edge spar
+    pushRibbon(
+      (t) => [0, baseY + t * 0.08, baseZ0 + t * 0.05],
+      (t) => {
+        const edge = Math.pow(Math.min(t * 1.4, 1), 0.75);
+        return [0.01, baseY + height * edge * 0.95, baseZ0 + t * 0.55 + edge * 0.15];
+      },
+      16,
+    );
   }
 
-  // Pectoral flippers
+  // Pectoral flippers — sickle/curved, long, tapered (side + ventral refs)
+  // Root near u~0.28 → z = (0.28-0.5)*len ≈ -1.19
   for (const side of [-1, 1] as const) {
-    const segs = 20;
-    const start = finPos.length / 3;
-    for (let i = 0; i <= segs; i++) {
-      const t = i / segs;
-      const span = Math.sin(t * Math.PI * 0.95) * 1.05;
-      const droop = t * 0.42;
-      const sweep = t * 0.48;
-      finPos.push(0.32 * side, -0.08, -0.85 + t * 0.2);
-      finPos.push(
-        (0.32 + span) * side,
-        -0.08 - droop - span * 0.12,
-        -0.85 + sweep + t * 0.25,
-      );
-    }
-    for (let i = 0; i < segs; i++) {
-      const a = start + i * 2;
-      finIdx.push(a, a + 1, a + 2);
-      finIdx.push(a + 2, a + 1, a + 3);
-    }
-    const midStart = finPos.length / 3;
-    for (let i = 0; i <= segs; i++) {
-      const t = i / segs;
-      const span = Math.sin(t * Math.PI * 0.95) * 0.62;
-      const droop = t * 0.25;
-      finPos.push(0.38 * side, -0.1, -0.75 + t * 0.22);
-      finPos.push((0.38 + span) * side, -0.1 - droop, -0.7 + t * 0.45);
-    }
-    for (let i = 0; i < segs; i++) {
-      const a = midStart + i * 2;
-      finIdx.push(a, a + 1, a + 2);
-      finIdx.push(a + 2, a + 1, a + 3);
-    }
+    const segs = 26;
+    const rootZ = -1.15;
+    const rootY = -0.1;
+    const rootX = 0.42;
+
+    // Main flipper blade — long chord, curved trailing, pointed tip
+    pushRibbon(
+      (t) => {
+        // Root attachment line along body
+        const z = rootZ + t * 0.35;
+        return [rootX * side * (0.95 + t * 0.05), rootY - t * 0.04, z];
+      },
+      (t) => {
+        // Span grows then tip tapers; swept aft; slight droop
+        const span = Math.sin(t * Math.PI * 0.88) * 1.25 * (1 - t * 0.08);
+        const sweep = t * 0.72; // aft sweep
+        const droop = t * 0.48 + span * 0.1;
+        // Leading edge more forward than trailing
+        const leadBias = (1 - t) * 0.12;
+        return [
+          (rootX + span) * side,
+          rootY - droop,
+          rootZ + sweep - leadBias + t * 0.15,
+        ];
+      },
+      segs,
+    );
+
+    // Trailing membrane (concave trailing edge of real flipper)
+    pushRibbon(
+      (t) => [
+        rootX * 1.05 * side,
+        rootY - 0.02,
+        rootZ + 0.12 + t * 0.3,
+      ],
+      (t) => {
+        const span = Math.sin(t * Math.PI * 0.9) * 0.95;
+        const sweep = t * 0.85;
+        return [
+          (rootX + span) * side,
+          rootY - t * 0.42 - span * 0.08,
+          rootZ + 0.2 + sweep,
+        ];
+      },
+      segs,
+    );
+
+    // Leading-edge ridge (stiffer leading edge of flipper)
+    pushRibbon(
+      (t) => [rootX * side, rootY, rootZ + t * 0.15],
+      (t) => {
+        const span = t * 1.15;
+        return [
+          (rootX + span) * side,
+          rootY - t * 0.35,
+          rootZ - 0.08 + t * 0.55,
+        ];
+      },
+      18,
+    );
   }
 
   const fins = new THREE.BufferGeometry();
@@ -342,53 +527,112 @@ function buildDolphinGeometry(seed: number): {
   fins.setIndex(finIdx);
   fins.computeVertexNormals();
 
-  // Horizontal flukes
+  /* ── Horizontal flukes — crescent, median notch, wide span ───── */
+
   const flukePos: number[] = [];
   const flukeIdx: number[] = [];
   {
-    const segs = 28;
+    const pedZ = len * 0.5 - 0.08; // peduncle tip
+    const segs = 32;
+    const halfSpan = 1.35;
+
     for (const side of [-1, 1] as const) {
+      // Leading edge of fluke (from peduncle out to tip)
+      const leadStart = flukePos.length / 3;
+      for (let i = 0; i <= segs; i++) {
+        const t = i / segs;
+        // Span distribution — broad mid-lobe, rounded tip
+        const span = Math.sin(t * Math.PI * 0.5) * halfSpan; // 0→1 quarter then...
+        // Actually classic fluke: chord length peaks mid-lobe
+        const x = (0.04 + Math.sin(t * Math.PI * 0.92) * halfSpan) * side;
+        // Leading edge curves slightly forward then aft
+        const zLead = pedZ + 0.05 + t * 0.55 + Math.sin(t * Math.PI) * 0.08;
+        // Thin foil section
+        flukePos.push(0.02 * side, 0.015, pedZ + t * 0.12);
+        flukePos.push(x, Math.sin(t * Math.PI) * 0.02 * side * 0.15, zLead);
+      }
+      for (let i = 0; i < segs; i++) {
+        const a = leadStart + i * 2;
+        flukeIdx.push(a, a + 1, a + 2);
+        flukeIdx.push(a + 2, a + 1, a + 3);
+      }
+
+      // Trailing edge crescent (concave aft margin + tip)
+      const trailStart = flukePos.length / 3;
+      for (let i = 0; i <= segs; i++) {
+        const t = i / segs;
+        const span = Math.sin(t * Math.PI * 0.95) * halfSpan;
+        // Crescent trailing: mid-lobe further aft, notch near center, tip rounded
+        const zTrail =
+          pedZ +
+          0.35 +
+          Math.sin(t * Math.PI) * 0.72 +
+          Math.pow(t, 1.6) * 0.15;
+        flukePos.push(
+          (0.06 + span * 0.35) * side,
+          0,
+          pedZ + 0.2 + t * 0.25,
+        );
+        flukePos.push((0.08 + span) * side, -0.01, zTrail);
+      }
+      for (let i = 0; i < segs; i++) {
+        const a = trailStart + i * 2;
+        flukeIdx.push(a, a + 1, a + 2);
+        flukeIdx.push(a + 2, a + 1, a + 3);
+      }
+
+      // Chord fill ribs (high-poly structure)
+      for (let rib = 0; rib < 8; rib++) {
+        const t0 = (rib + 0.5) / 8;
+        const span = Math.sin(t0 * Math.PI * 0.92) * halfSpan;
+        const x = (0.08 + span) * side;
+        const zL = pedZ + 0.08 + t0 * 0.5;
+        const zT = pedZ + 0.35 + Math.sin(t0 * Math.PI) * 0.68;
+        const rs = flukePos.length / 3;
+        flukePos.push(x * 0.4, 0.02, zL);
+        flukePos.push(x, 0, (zL + zT) * 0.5);
+        flukePos.push(x * 0.5, -0.015, zT);
+        flukePos.push(x * 0.25, 0, zL + 0.05);
+        flukeIdx.push(rs, rs + 1, rs + 3);
+        flukeIdx.push(rs + 1, rs + 2, rs + 3);
+      }
+    }
+
+    // Median notch (distinctive cetacean fluke notch)
+    {
+      const segs = 12;
       const start = flukePos.length / 3;
       for (let i = 0; i <= segs; i++) {
         const t = i / segs;
-        const span = Math.sin(t * Math.PI * 0.92) * 1.15;
-        const aft = t * 0.95;
-        flukePos.push(0.02 * side, 0, len * 0.5 - 0.05 + t * 0.08);
-        flukePos.push(
-          (0.05 + span) * side,
-          Math.sin(t * Math.PI) * 0.04 * side * 0.2,
-          len * 0.5 - 0.02 + aft,
-        );
+        // V-notch between lobes
+        const w = 0.04 + t * 0.08;
+        const z = pedZ + 0.25 + t * 0.55;
+        flukePos.push(-w, 0.005, z);
+        flukePos.push(w, 0.005, z);
       }
       for (let i = 0; i < segs; i++) {
         const a = start + i * 2;
         flukeIdx.push(a, a + 1, a + 2);
         flukeIdx.push(a + 2, a + 1, a + 3);
       }
-      const cStart = flukePos.length / 3;
-      for (let i = 0; i <= segs; i++) {
-        const t = i / segs;
-        const span = Math.sin(t * Math.PI) * 1.05;
-        flukePos.push(0.04 * side, 0.01, len * 0.5 + 0.15);
-        flukePos.push(
-          (0.08 + span) * side,
-          -0.02,
-          len * 0.5 + 0.25 + Math.cos(t * Math.PI) * 0.35,
-        );
-      }
-      for (let i = 0; i < segs; i++) {
-        const a = cStart + i * 2;
-        flukeIdx.push(a, a + 1, a + 2);
-        flukeIdx.push(a + 2, a + 1, a + 3);
-      }
+      // Notch depth crease
+      const ns = flukePos.length / 3;
+      flukePos.push(0, 0.02, pedZ + 0.2);
+      flukePos.push(0, -0.02, pedZ + 0.2);
+      flukePos.push(0, 0, pedZ + 0.85);
+      flukeIdx.push(ns, ns + 1, ns + 2);
     }
-    {
-      const segs = 10;
+
+    // Peduncle-to-fluke keels (lateral ridges feeding power to flukes)
+    for (const side of [-1, 1] as const) {
+      const segs = 14;
       const start = flukePos.length / 3;
       for (let i = 0; i <= segs; i++) {
         const t = i / segs;
-        flukePos.push(-0.06, 0, len * 0.5 + 0.05 + t * 0.35);
-        flukePos.push(0.06, 0, len * 0.5 + 0.05 + t * 0.35);
+        const z = pedZ - 0.55 + t * 0.55;
+        const x = (0.1 + Math.sin(t * Math.PI) * 0.12) * side;
+        flukePos.push(x * 0.7, 0.03, z);
+        flukePos.push(x, -0.02, z + 0.02);
       }
       for (let i = 0; i < segs; i++) {
         const a = start + i * 2;
@@ -403,31 +647,68 @@ function buildDolphinGeometry(seed: number): {
   flukes.setIndex(flukeIdx);
   flukes.computeVertexNormals();
 
-  // Detail: blowhole, eyes, smile, melon crease, mouth
+  /* ── Detail: blowhole, eyes, smile, melon crease, gape, teeth hint */
+
   const dPos: number[] = [];
   const dIdx: number[] = [];
 
-  {
-    const segs = 14;
-    const cx = 0;
-    const cy = 0.38;
-    const cz = -1.75;
+  const pushRing = (
+    cx: number,
+    cy: number,
+    cz: number,
+    rx: number,
+    ry: number,
+    rz: number,
+    segs: number,
+    extrude = 0.03,
+  ) => {
     const start = dPos.length / 3;
     for (let i = 0; i <= segs; i++) {
       const a = (i / segs) * Math.PI * 2;
+      const ox = Math.cos(a) * rx;
+      const oy = Math.sin(a) * ry;
+      const oz = Math.cos(a) * rz * 0.3;
       dPos.push(cx, cy, cz);
-      dPos.push(cx + Math.cos(a) * 0.1, cy + 0.04, cz + Math.sin(a) * 0.07);
+      dPos.push(cx + ox, cy + oy + extrude * 0.4, cz + oz);
     }
     for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
       dIdx.push(a, a + 1, a + 2);
       dIdx.push(a + 2, a + 1, a + 3);
     }
+  };
+
+  // Blowhole — single crescent opening on dorsal cranium (behind melon apex)
+  // Real bottlenose: slightly left-of-center crescent; we center for clarity
+  {
+    const cx = 0;
+    const cy = 0.42;
+    const cz = -1.55; // u ≈ 0.21
+    const segs = 18;
+    // Outer crescent
+    const start = dPos.length / 3;
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      const a = -Math.PI * 0.55 + t * Math.PI * 1.1; // crescent arc
+      const x = Math.sin(a) * 0.09;
+      const z = cz + Math.cos(a) * 0.05;
+      dPos.push(cx, cy, cz);
+      dPos.push(x, cy + 0.035, z);
+    }
+    for (let i = 0; i < segs; i++) {
+      const a = start + i * 2;
+      dIdx.push(a, a + 1, a + 2);
+      dIdx.push(a + 2, a + 1, a + 3);
+    }
+    // Rim ridge
     const rStart = dPos.length / 3;
     for (let i = 0; i <= segs; i++) {
-      const a = (i / segs) * Math.PI * 2;
-      dPos.push(cx + Math.cos(a) * 0.1, cy + 0.04, cz + Math.sin(a) * 0.07);
-      dPos.push(cx + Math.cos(a) * 0.14, cy + 0.02, cz + Math.sin(a) * 0.1);
+      const t = i / segs;
+      const a = -Math.PI * 0.55 + t * Math.PI * 1.1;
+      const x = Math.sin(a) * 0.09;
+      const z = cz + Math.cos(a) * 0.05;
+      dPos.push(x, cy + 0.035, z);
+      dPos.push(x * 1.35, cy + 0.01, z + 0.02);
     }
     for (let i = 0; i < segs; i++) {
       const a = rStart + i * 2;
@@ -436,20 +717,21 @@ function buildDolphinGeometry(seed: number): {
     }
   }
 
+  // Eyes — lateral, slightly below midline, just behind mouth corner
   for (const side of [-1, 1] as const) {
-    const segs = 14;
-    const cx = side * 0.38;
-    const cy = 0.08;
-    const cz = -1.95;
+    const cx = side * 0.36;
+    const cy = 0.05;
+    const cz = -1.85; // u ≈ 0.16
+    pushRing(cx, cy, cz, 0.055 * side * 0.4 + 0.05, 0.05, 0.04, 16, 0.02);
+    // Dark pupil ring (inner)
+    pushRing(cx + side * 0.01, cy, cz + 0.01, 0.028, 0.025, 0.02, 12, 0.015);
+    // Pre-orbital crease
+    const segs = 10;
     const start = dPos.length / 3;
     for (let i = 0; i <= segs; i++) {
-      const a = (i / segs) * Math.PI * 2;
-      dPos.push(cx, cy, cz);
-      dPos.push(
-        cx + Math.cos(a) * 0.07 * side * 0.35 + Math.cos(a) * 0.015,
-        cy + Math.sin(a) * 0.065,
-        cz + Math.cos(a) * 0.05,
-      );
+      const t = i / segs;
+      dPos.push(side * (0.3 + t * 0.08), cy + 0.04 - t * 0.02, cz - 0.08 + t * 0.12);
+      dPos.push(side * (0.32 + t * 0.08), cy + 0.02 - t * 0.02, cz - 0.06 + t * 0.12);
     }
     for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
@@ -458,16 +740,38 @@ function buildDolphinGeometry(seed: number): {
     }
   }
 
+  // Permanent "smile" — mandibular crease (iconic bottlenose)
   for (const side of [-1, 1] as const) {
+    const segs = 20;
+    const start = dPos.length / 3;
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      // From near tip of gape aft and up slightly toward eye
+      const z = -2.45 + t * 0.72;
+      const y = -0.1 + Math.sin(t * Math.PI * 0.85) * 0.07 + t * 0.02;
+      const x = side * (0.12 + t * 0.2 + Math.sin(t * Math.PI) * 0.04);
+      dPos.push(x, y, z);
+      dPos.push(x * 1.04, y - 0.025, z + 0.015);
+    }
+    for (let i = 0; i < segs; i++) {
+      const a = start + i * 2;
+      dIdx.push(a, a + 1, a + 2);
+      dIdx.push(a + 2, a + 1, a + 3);
+    }
+  }
+
+  // Melon crease — groove between melon and rostrum (front + side refs)
+  {
     const segs = 16;
     const start = dPos.length / 3;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const z = -2.35 + t * 0.55;
-      const y = -0.12 + Math.sin(t * Math.PI) * 0.06;
-      const x = side * (0.22 + t * 0.12);
-      dPos.push(x, y, z);
-      dPos.push(x * 1.05, y - 0.03, z + 0.02);
+      const a = -0.85 + t * 1.7;
+      const x = Math.sin(a) * 0.2;
+      const y = 0.14 + Math.cos(a) * 0.1;
+      const z = -2.05;
+      dPos.push(x * 0.9, y + 0.05, z);
+      dPos.push(x, y, z + 0.05);
     }
     for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
@@ -476,17 +780,18 @@ function buildDolphinGeometry(seed: number): {
     }
   }
 
+  // Mouth gape / jaw line under rostrum
   {
-    const segs = 12;
+    const segs = 22;
     const start = dPos.length / 3;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const a = -0.7 + t * 1.4;
-      const x = Math.sin(a) * 0.22;
-      const y = 0.18 + Math.cos(a) * 0.08;
-      const z = -2.15;
-      dPos.push(x * 0.85, y + 0.04, z);
-      dPos.push(x, y, z + 0.04);
+      // Long gape along beak underside
+      const z = -2.7 + t * 0.55;
+      const x = Math.sin((t - 0.5) * 1.1) * 0.1 * (1 - t * 0.3);
+      const y = -0.08 - Math.sin(t * Math.PI) * 0.015;
+      dPos.push(x * 0.7, y + 0.025, z);
+      dPos.push(x, y, z + 0.01);
     }
     for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
@@ -495,35 +800,76 @@ function buildDolphinGeometry(seed: number): {
     }
   }
 
-  {
-    const segs = 18;
-    const start = dPos.length / 3;
-    for (let i = 0; i <= segs; i++) {
-      const t = i / segs;
-      const a = -Math.PI * 0.45 + t * Math.PI * 0.9;
-      const x = Math.sin(a) * 0.14;
-      const y = -0.1 + Math.cos(a) * 0.02;
-      const z = -2.55 + Math.abs(Math.sin(a)) * 0.08;
-      dPos.push(x * 0.75, y + 0.03, z + 0.05);
-      dPos.push(x, y, z);
-    }
-    for (let i = 0; i < segs; i++) {
-      const a = start + i * 2;
-      dIdx.push(a, a + 1, a + 2);
-      dIdx.push(a + 2, a + 1, a + 3);
+  // Conical teeth hint along gape (bottlenose has ~80–100 peg teeth)
+  for (let row = 0; row < 2; row++) {
+    const yBase = row === 0 ? -0.06 : -0.1;
+    const count = 12;
+    for (let i = 0; i < count; i++) {
+      const t = i / (count - 1);
+      const z = -2.65 + t * 0.45;
+      const x = Math.sin((t - 0.5) * 0.9) * 0.08;
+      const start = dPos.length / 3;
+      dPos.push(x - 0.012, yBase, z);
+      dPos.push(x + 0.012, yBase, z);
+      dPos.push(x, yBase + (row === 0 ? -0.035 : 0.03), z + 0.008);
+      dIdx.push(start, start + 1, start + 2);
     }
   }
 
+  // Ear (tiny external meatus) — just behind eye
   for (const side of [-1, 1] as const) {
-    const segs = 30;
+    pushRing(side * 0.4, 0.02, -1.65, 0.02, 0.018, 0.015, 8, 0.01);
+  }
+
+  // Umbilical / genital slit hint (ventral midbody) — subtle anatomical mark
+  {
+    const segs = 8;
     const start = dPos.length / 3;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const u = 0.12 + t * 0.72;
+      const z = 0.35 + t * 0.35;
+      dPos.push(-0.02, -0.48, z);
+      dPos.push(0.02, -0.48, z);
+    }
+    for (let i = 0; i < segs; i++) {
+      const a = start + i * 2;
+      dIdx.push(a, a + 1, a + 2);
+      dIdx.push(a + 2, a + 1, a + 3);
+    }
+  }
+
+  // Dorsal ridge line behind dorsal fin (peduncle top)
+  {
+    const segs = 24;
+    const start = dPos.length / 3;
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      const u = 0.55 + t * 0.38;
+      const z = (u - 0.5) * len;
+      const r = bodyRadius(u) * bodyHeightScale(u);
+      const y = r * 0.95 + spineYOffset(u);
+      dPos.push(-0.015, y, z);
+      dPos.push(0.015, y + 0.02, z + 0.02);
+    }
+    for (let i = 0; i < segs; i++) {
+      const a = start + i * 2;
+      dIdx.push(a, a + 1, a + 2);
+      dIdx.push(a + 2, a + 1, a + 3);
+    }
+  }
+
+  // Lateral line (faint)
+  for (const side of [-1, 1] as const) {
+    const segs = 36;
+    const start = dPos.length / 3;
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      const u = 0.14 + t * 0.72;
       const z = (u - 0.5) * len;
       const r = bodyRadius(u) * bodyWidthScale(u);
-      dPos.push(side * r * 0.97, 0.01, z);
-      dPos.push(side * r * 1.01, 0.01, z + 0.035);
+      const y = spineYOffset(u) - 0.02;
+      dPos.push(side * r * 0.97, y, z);
+      dPos.push(side * r * 1.01, y, z + 0.03);
     }
     for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
@@ -550,8 +896,8 @@ function buildSoftLattice(): {
   radial: number;
 } {
   const len = BODY_LEN;
-  const spineCount = 20;
-  const radial = 12;
+  const spineCount = 22;
+  const radial = 14;
   const particles: SoftParticle[] = [];
   const springs: SoftSpring[] = [];
 
@@ -561,11 +907,17 @@ function buildSoftLattice(): {
     const r = bodyRadius(u) * 0.94;
     const hy = bodyHeightScale(u);
     const hx = bodyWidthScale(u);
-    particles.push(makeParticle(0, 0, z, s === 0));
+    const cy = spineYOffset(u);
+    particles.push(makeParticle(0, cy, z, s === 0));
     for (let k = 0; k < radial; k++) {
       const a = (k / radial) * Math.PI * 2;
       particles.push(
-        makeParticle(Math.cos(a) * r * hx, Math.sin(a) * r * hy, z, false),
+        makeParticle(
+          Math.cos(a) * r * hx,
+          Math.sin(a) * r * hy + cy,
+          z,
+          false,
+        ),
       );
     }
   }
@@ -583,16 +935,22 @@ function buildSoftLattice(): {
   for (let s = 0; s < spineCount; s++) {
     const base = s * ringSize;
     for (let k = 0; k < radial; k++) {
-      addSpring(base, base + 1 + k, 0.9);
-      addSpring(base + 1 + k, base + 1 + ((k + 1) % radial), 0.8);
-      addSpring(base + 1 + k, base + 1 + ((k + 2) % radial), 0.5);
-      addSpring(base + 1 + k, base + 1 + ((k + 3) % radial), 0.34);
+      // Stiffer head (rostrum + melon hold shape)
+      const u = s / (spineCount - 1);
+      const headStiff = u < 0.25 ? 1.08 : 1;
+      addSpring(base, base + 1 + k, 0.9 * headStiff);
+      addSpring(base + 1 + k, base + 1 + ((k + 1) % radial), 0.82 * headStiff);
+      addSpring(base + 1 + k, base + 1 + ((k + 2) % radial), 0.52);
+      addSpring(base + 1 + k, base + 1 + ((k + 3) % radial), 0.36);
     }
     if (s < spineCount - 1) {
       const next = (s + 1) * ringSize;
-      addSpring(base, next, 0.97);
+      const u = s / (spineCount - 1);
+      // Softer peduncle springs for fluke drive
+      const longStiff = u > 0.7 ? 0.88 : 0.97;
+      addSpring(base, next, longStiff);
       for (let k = 0; k < radial; k++) {
-        addSpring(base + 1 + k, next + 1 + k, 0.74);
+        addSpring(base + 1 + k, next + 1 + k, u > 0.7 ? 0.62 : 0.76);
         addSpring(base + 1 + k, next + 1 + ((k + 1) % radial), 0.44);
         addSpring(base + 1 + k, next, 0.4);
       }
@@ -756,7 +1114,7 @@ function createDolphin(id: number): DolphinSim {
   };
 }
 
-/* ── Soft-body: DORSOVENTRAL undulation (cetacean fluke drive) ──── */
+/* ── Soft-body: DORSOVENTRAL undulation ─────────────────────────── */
 
 const _diff = new THREE.Vector3();
 
@@ -767,36 +1125,41 @@ function stepSoftBody(d: DolphinSim, dt: number, swimAmp: number, t: number) {
 
   for (let s = 0; s < d.spineCount; s++) {
     const u = s / (d.spineCount - 1);
-    const tailWeight = Math.pow(u, 1.55);
+    // Stiff head (u<0.3), flexible peduncle — wave amplitude ∝ u^1.7
+    const tailWeight = Math.pow(Math.max(0, u - 0.2) / 0.8, 1.7);
     const wave =
-      Math.sin(u * 3.8 - t * 5.2 + d.phase) *
+      Math.sin(u * 3.6 - t * 5.4 + d.phase) *
       swimAmp *
-      (0.12 + tailWeight * 1.75);
+      (0.08 + tailWeight * 1.85);
     const base = s * ringSize;
     const p = particles[base]!;
     if (!p.pinned) {
-      p.y += wave * dt * 2.6;
+      p.y += wave * dt * 2.7;
     }
     for (let k = 0; k < d.radial; k++) {
       const q = particles[base + 1 + k]!;
-      q.y += wave * dt * 2.3;
-      q.x +=
-        Math.sin(u * 2.2 - t * 3.5 + d.phase) *
-        swimAmp *
-        0.1 *
-        tailWeight *
-        dt;
+      q.y += wave * dt * 2.4;
+      // Peduncle slight lateral roll
+      if (u > 0.55) {
+        q.x +=
+          Math.sin(u * 2.1 - t * 3.6 + d.phase) *
+          swimAmp *
+          0.12 *
+          tailWeight *
+          dt;
+      }
     }
   }
 
+  // Soft smile flex when curious
   if (d.smile > 0.2 && d.alarm < 0.35) {
-    for (let s = 0; s < 3; s++) {
+    for (let s = 0; s < 4; s++) {
       const base = s * ringSize;
       for (let k = 0; k < d.radial; k++) {
         const a = (k / d.radial) * Math.PI * 2;
-        if (Math.sin(a) < -0.15) {
+        if (Math.sin(a) < -0.2) {
           const q = particles[base + 1 + k]!;
-          q.y -= d.smile * 0.04 * dt * 4;
+          q.y -= d.smile * 0.035 * dt * 4;
         }
       }
     }
@@ -839,32 +1202,36 @@ function stepSoftBody(d: DolphinSim, dt: number, swimAmp: number, t: number) {
       }
     }
 
+    // Shape retention toward anatomical rest
     for (let s = 0; s < d.spineCount; s++) {
       const u = s / (d.spineCount - 1);
       const z = (u - 0.5) * BODY_LEN;
       const r = bodyRadius(u) * 0.94;
       const hy = bodyHeightScale(u);
       const hx = bodyWidthScale(u);
+      const cy = spineYOffset(u);
       const base = s * ringSize;
       const center = particles[base]!;
-      const retain = u < 0.3 ? 0.15 : 0.07;
+      // Stronger retention in head/melon for silhouette
+      const retain = u < 0.28 ? 0.18 : u > 0.75 ? 0.05 : 0.08;
       if (!center.pinned) {
         center.x += (0 - center.x) * retain;
-        center.y += (0 - center.y) * retain;
+        center.y += (cy - center.y) * retain;
         center.z += (z - center.z) * retain;
       } else {
         center.x = 0;
-        center.y = 0;
+        center.y = cy;
         center.z = z;
       }
       for (let k = 0; k < d.radial; k++) {
         const a = (k / d.radial) * Math.PI * 2;
         const q = particles[base + 1 + k]!;
         const rx = Math.cos(a) * r * hx;
-        const ry = Math.sin(a) * r * hy;
-        q.x += (rx - q.x) * 0.065;
-        q.y += (ry - q.y) * 0.065;
-        q.z += (z - q.z) * 0.065;
+        const ry = Math.sin(a) * r * hy + cy;
+        const rs = u < 0.28 ? 0.1 : 0.06;
+        q.x += (rx - q.x) * rs;
+        q.y += (ry - q.y) * rs;
+        q.z += (z - q.z) * rs;
       }
     }
   }
@@ -944,7 +1311,6 @@ function projectPointer(
   _raycaster.setFromCamera(pointer, camera);
   const hit = _raycaster.ray.intersectPlane(_plane, out);
   if (!hit) {
-    // Fallback: unproject at fixed depth if ray is parallel to plane
     _ndc.set(pointer.x, pointer.y, 0.5).unproject(camera);
     out.copy(_ndc);
     out.y = 4.5;
