@@ -287,17 +287,29 @@ type MermaidSim = {
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   heading: THREE.Vector3;
+  /** Previous velocity for inertial soft-tissue (breast jiggle, hair lag). */
+  prevVel: THREE.Vector3;
+  /** Smoothed local acceleration. */
+  accel: THREE.Vector3;
   yaw: number;
   pitch: number;
+  bank: number;
   speed: number;
   baseSpeed: number;
   phase: number;
+  /** Stroke frequency phase (independent of turn phase). */
+  strokePhase: number;
   scale: number;
   alarm: number;
   curiosity: number;
   podAngle: number;
   hairHue: number;
   tailHue: number;
+  /** Soft-tissue state: breast displacement (secondary motion). */
+  bustDisp: THREE.Vector3;
+  bustVel: THREE.Vector3;
+  /** Hip soft sway residual. */
+  hipSway: number;
 };
 
 /** Shark avoid ranges — wider than dolphin so mermaids react earlier */
@@ -1127,12 +1139,14 @@ function buildSoftLattice(): {
   for (let s = 0; s < spineCount; s++) {
     const base = s * ringSize;
     const u = s / (spineCount - 1);
-    const torsoStiff = u < TORSO_RETAIN_U ? 1.12 : 1;
+    // Softer springs through bust region so soft tissue can jiggle
+    const inBust = u > 0.15 && u < 0.28;
+    const torsoStiff = inBust ? 0.72 : u < TORSO_RETAIN_U ? 1.12 : 1;
     for (let k = 0; k < radial; k++) {
       addSpring(base, base + 1 + k, 0.94 * torsoStiff);
       addSpring(base + 1 + k, base + 1 + ((k + 1) % radial), 0.88 * torsoStiff);
-      addSpring(base + 1 + k, base + 1 + ((k + 2) % radial), 0.55);
-      addSpring(base + 1 + k, base + 1 + ((k + 3) % radial), 0.38);
+      addSpring(base + 1 + k, base + 1 + ((k + 2) % radial), inBust ? 0.38 : 0.55);
+      addSpring(base + 1 + k, base + 1 + ((k + 3) % radial), inBust ? 0.24 : 0.38);
     }
     if (s < spineCount - 1) {
       const next = (s + 1) * ringSize;
@@ -1349,58 +1363,182 @@ function createMermaid(id: number): MermaidSim {
     pos,
     vel: heading.clone().multiplyScalar(baseSpeed),
     heading,
+    prevVel: heading.clone().multiplyScalar(baseSpeed),
+    accel: new THREE.Vector3(),
     yaw,
     pitch: 0,
+    bank: 0,
     speed: baseSpeed,
     baseSpeed,
     phase: seeded(seed + 6) * Math.PI * 2,
+    strokePhase: seeded(seed + 7) * Math.PI * 2,
     scale,
     alarm: 0,
     curiosity: 0.45 + seeded(seed + 8) * 0.4,
     podAngle: angle,
     hairHue,
     tailHue,
+    bustDisp: new THREE.Vector3(),
+    bustVel: new THREE.Vector3(),
+    hipSway: 0,
   };
 }
 
-/* ── Soft-body step ────────────────────────────────────────────── */
+/* ── Soft-body + realistic swim ─────────────────────────────────── */
 
 const _diff = new THREE.Vector3();
 
+/**
+ * Traveling lateral S-wave for mermaid locomotion.
+ * Power from hips → peduncle; shoulders counter-sway slightly.
+ * Soft tissue: breast jiggle from world accel + stroke; hip sway.
+ */
 function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
   const particles = m.particles;
   const ringSize = 1 + m.radial;
-  const damp = Math.pow(0.91, dt * 60);
+  const damp = Math.pow(0.905, dt * 60);
 
-  // Lateral undulation — minimal through torso, strong on tail only
+  // Inertial soft tissue from acceleration
+  const invDt = 1 / Math.max(dt, 1e-4);
+  const ax = (m.vel.x - m.prevVel.x) * invDt;
+  const ay = (m.vel.y - m.prevVel.y) * invDt;
+  const az = (m.vel.z - m.prevVel.z) * invDt;
+  m.accel.x += (ax - m.accel.x) * 0.45;
+  m.accel.y += (ay - m.accel.y) * 0.45;
+  m.accel.z += (az - m.accel.z) * 0.45;
+  m.prevVel.copy(m.vel);
+
+  const fwdX = m.heading.x;
+  const fwdZ = m.heading.z;
+  const rightX = -fwdZ;
+  const rightZ = fwdX;
+  const aLat = m.accel.x * rightX + m.accel.z * rightZ;
+  const aUp = m.accel.y;
+  const aFwd = m.accel.x * fwdX + m.accel.z * fwdZ;
+
+  // Breast soft-tissue spring-damper (secondary motion)
+  const bustStiff = 38;
+  const bustDamp = 7.5;
+  const driveY =
+    -aUp * 0.012 -
+    aFwd * 0.004 +
+    Math.sin(m.strokePhase * 2) * swimAmp * 0.038 * (0.5 + m.speed * 0.15) +
+    m.bank * 0.02;
+  const driveX =
+    -aLat * 0.015 +
+    Math.sin(m.strokePhase) * swimAmp * 0.02 * m.speed * 0.08 +
+    m.bank * 0.045;
+
+  m.bustVel.x += (driveX - m.bustDisp.x * bustStiff - m.bustVel.x * bustDamp) * dt;
+  m.bustVel.y += (driveY - m.bustDisp.y * bustStiff - m.bustVel.y * bustDamp) * dt;
+  m.bustVel.z +=
+    (-aFwd * 0.0035 - m.bustDisp.z * (bustStiff * 1.2) - m.bustVel.z * bustDamp) * dt;
+  m.bustDisp.x += m.bustVel.x * dt;
+  m.bustDisp.y += m.bustVel.y * dt;
+  m.bustDisp.z += m.bustVel.z * dt;
+  m.bustDisp.x = THREE.MathUtils.clamp(m.bustDisp.x, -0.13, 0.13);
+  m.bustDisp.y = THREE.MathUtils.clamp(m.bustDisp.y, -0.15, 0.11);
+  m.bustDisp.z = THREE.MathUtils.clamp(m.bustDisp.z, -0.09, 0.09);
+
+  const hipTarget = Math.sin(m.strokePhase - 0.4) * swimAmp * 0.55;
+  m.hipSway += (hipTarget - m.hipSway) * Math.min(1, dt * 8);
+
+  // Traveling swim wave along spine
   for (let s = 0; s < m.spineCount; s++) {
     const u = s / (m.spineCount - 1);
     if (u <= HEAD_FREEZE_U) continue;
 
-    // Nearly zero wave on torso so hourglass silhouette stays readable
-    const tailWeight =
-      u < TORSO_RETAIN_U
-        ? 0.04 * ((u - HEAD_FREEZE_U) / Math.max(1e-6, TORSO_RETAIN_U - HEAD_FREEZE_U))
-        : 0.08 +
-          Math.pow((u - TORSO_RETAIN_U) / (1 - TORSO_RETAIN_U), 1.55) * 1.85;
+    const base = s * ringSize;
+
+    let envelope: number;
+    if (u < TORSO_RETAIN_U) {
+      envelope = -0.14 * smoothstep(HEAD_FREEZE_U, TORSO_RETAIN_U, u);
+    } else if (u < TORSO_END) {
+      envelope = 0.35 * smoothstep(TORSO_RETAIN_U, TORSO_END, u);
+    } else {
+      const tu = (u - TORSO_END) / (1 - TORSO_END);
+      envelope = 0.35 + Math.pow(tu, 1.35) * 1.95;
+    }
 
     const wave =
-      Math.sin(u * 3.8 - t * 5.8 + m.phase) * swimAmp * (0.08 + tailWeight);
-    const base = s * ringSize;
-    const p = particles[base]!;
-    if (!p.pinned) p.x += wave * dt * 2.5;
+      Math.sin(u * 4.6 - m.strokePhase * 1.15 - t * 0.12 + m.phase * 0.2) *
+      swimAmp *
+      envelope;
+    const wave2 =
+      Math.sin(u * 7.2 - m.strokePhase * 1.6 + m.phase) *
+      swimAmp *
+      0.2 *
+      Math.max(0, envelope);
+    const flukeKick =
+      u > 0.7
+        ? Math.sin(u * 3.2 - m.strokePhase * 1.1) *
+          swimAmp *
+          0.38 *
+          Math.pow((u - 0.7) / 0.3, 1.4)
+        : 0;
+
+    const lat = (wave + wave2) * dt * 2.85;
+    const vert = flukeKick * dt * 2.25;
+
+    const center = particles[base]!;
+    if (!center.pinned) {
+      center.x += lat + m.hipSway * Math.max(0, u - 0.3) * 0.15 * dt * 8;
+      center.y += vert;
+    }
+
     for (let k = 0; k < m.radial; k++) {
       const q = particles[base + 1 + k]!;
       if (q.pinned) continue;
-      q.x += wave * dt * 2.2;
-      // Subtle soft-body jiggle on bust (very small)
-      if (u > 0.16 && u < 0.26) {
-        q.y +=
-          Math.sin(t * 5.8 + m.phase + u * 4) *
-          swimAmp *
-          0.04 *
-          dt *
-          (m.speed * 0.12 + 0.3);
+      const a = (k / m.radial) * Math.PI * 2;
+      const sa = Math.sin(a);
+      const ca = Math.cos(a);
+
+      q.x += lat * 0.95;
+      q.y += vert * 0.9;
+
+      // Breast soft-body (ventral dual lobes)
+      if (u > 0.155 && u < 0.27 && sa < -0.08) {
+        const bu = 1 - Math.abs(u - BUST_U) / 0.06;
+        if (bu > 0) {
+          const ventral = Math.max(0, -sa);
+          const lobeL = Math.exp(-Math.pow((ca - 0.48) * 2.6, 2));
+          const lobeR = Math.exp(-Math.pow((ca + 0.48) * 2.6, 2));
+          const lobe = Math.max(lobeL, lobeR);
+          const w = bu * ventral * (0.35 + lobe * 0.9);
+          const sideSign = ca >= 0 ? 1 : -1;
+          const lobePhase = sideSign * 0.2;
+          const jiggleX =
+            m.bustDisp.x * w * 1.2 +
+            Math.sin(m.strokePhase + lobePhase) * swimAmp * 0.022 * w * m.speed * 0.1;
+          const jiggleY =
+            m.bustDisp.y * w * 1.4 +
+            Math.sin(m.strokePhase * 2 + lobePhase * 1.4) * swimAmp * 0.032 * w;
+          const jiggleZ = m.bustDisp.z * w * 0.75;
+
+          q.x += jiggleX * dt * 55;
+          q.y += jiggleY * dt * 55;
+          q.z += jiggleZ * dt * 40;
+          q.x -= aLat * 0.00038 * w * dt * 60;
+          q.y -= aUp * 0.00042 * w * dt * 60;
+        }
+      }
+
+      // Soft belly
+      if (u > 0.24 && u < 0.34 && sa < -0.35) {
+        const bw = (-sa - 0.35) * (1 - Math.abs(u - 0.29) / 0.06);
+        if (bw > 0) {
+          q.y += m.bustDisp.y * 0.28 * bw * dt * 30;
+          q.x += m.bustDisp.x * 0.16 * bw * dt * 25;
+        }
+      }
+
+      // Hip soft flesh
+      if (u > 0.33 && u < 0.48) {
+        const hw = 1 - Math.abs(u - HIP_U) / 0.1;
+        if (hw > 0) {
+          q.x += m.hipSway * 0.09 * hw * Math.abs(ca) * dt * 20;
+          q.y += Math.sin(m.strokePhase * 2 + 0.5) * swimAmp * 0.016 * hw * dt * 15;
+        }
       }
     }
   }
@@ -1448,17 +1586,15 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
       const cy = spineYOffset(u);
       const base = s * ringSize;
       const center = particles[base]!;
-      // Strong shape retention on head/torso so anatomy stays readable
-      const retain =
-        u <= HEAD_FREEZE_U
-          ? 0.55
-          : u < TORSO_RETAIN_U
-            ? 0.18
-            : u < TORSO_END
-              ? 0.1
-              : u > 0.8
-                ? 0.04
-                : 0.06;
+
+      let retain: number;
+      if (u <= HEAD_FREEZE_U) retain = 0.55;
+      else if (u > 0.155 && u < 0.27) retain = 0.055;
+      else if (u < TORSO_RETAIN_U) retain = 0.15;
+      else if (u < TORSO_END) retain = 0.085;
+      else if (u > 0.8) retain = 0.032;
+      else retain = 0.05;
+
       if (!center.pinned) {
         center.x += (0 - center.x) * retain;
         center.y += (cy - center.y) * retain;
@@ -1468,24 +1604,24 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
         center.y = cy;
         center.z = z;
       }
+
       for (let k = 0; k < m.radial; k++) {
         const a = (k / m.radial) * Math.PI * 2;
         const q = particles[base + 1 + k]!;
-        // Rest pose from full anatomical sample (bust, hips, waist)
         const rest = sampleBodyRing(u, a, 0);
         if (q.pinned) {
           q.x = rest.x;
           q.y = rest.y;
           q.z = rest.z;
         } else {
-          const rs =
-            u <= HEAD_FREEZE_U
-              ? 0.28
-              : u < TORSO_RETAIN_U
-                ? 0.14
-                : u < TORSO_END
-                  ? 0.08
-                  : 0.045;
+          const sa = Math.sin(a);
+          let rs: number;
+          if (u <= HEAD_FREEZE_U) rs = 0.28;
+          else if (u > 0.155 && u < 0.27 && sa < -0.05) rs = 0.032;
+          else if (u < TORSO_RETAIN_U) rs = 0.11;
+          else if (u < TORSO_END) rs = 0.065;
+          else rs = 0.038;
+
           q.x += (rest.x - q.x) * rs;
           q.y += (rest.y - q.y) * rs;
           q.z += (rest.z - q.z) * rs;
@@ -1528,11 +1664,15 @@ function deformMeshFromLattice(
       dy += (p.y - r.y) * w;
       dz += (p.z - r.z) * w;
     }
-    // Hair gets exaggerated soft lag
-    const hairBoost = ry > 0.2 && rz < -BODY_LEN * 0.15 ? 1.35 : 1;
-    arr[v * 3] = rx + dx * hairBoost;
-    arr[v * 3 + 1] = ry + dy * hairBoost;
-    arr[v * 3 + 2] = rz + dz * hairBoost;
+    // Hair lag + mild bust secondary-motion boost
+    const hairBoost = ry > 0.15 && rz < -BODY_LEN * 0.12 ? 1.55 : 1;
+    const uApprox = rz / BODY_LEN + 0.5;
+    const bustBoost =
+      hairBoost <= 1 && uApprox > 0.15 && uApprox < 0.28 && ry < 0.05 ? 1.28 : 1;
+    const boost = hairBoost * bustBoost;
+    arr[v * 3] = rx + dx * boost;
+    arr[v * 3 + 1] = ry + dy * boost;
+    arr[v * 3 + 2] = rz + dz * boost;
   }
   posAttr.needsUpdate = true;
 }
@@ -1709,12 +1849,34 @@ function aiStep(
     m.heading.copy(m.vel).normalize();
     m.yaw = Math.atan2(-m.heading.x, -m.heading.z);
     m.pitch = Math.asin(THREE.MathUtils.clamp(m.heading.y, -0.55, 0.55));
-    m.phase += dt * (3.6 + m.speed * 2.4 + m.alarm * 1.8);
+
+    // Stroke rate scales with speed
+    const strokeRate = 2.9 + m.speed * 1.45 + m.alarm * 1.4;
+    m.strokePhase += dt * strokeRate;
+    m.phase += dt * (3.2 + m.speed * 2.1 + m.alarm * 1.5);
+
+    // Bank into turns + residual stroke roll
+    const turn = THREE.MathUtils.clamp(m.vel.x * 0.04 - m.heading.x * 0.35, -0.4, 0.4);
+    const strokeRoll = Math.sin(m.strokePhase) * 0.06 * (0.6 + m.speed * 0.12);
+    const targetBank = turn + strokeRoll + m.alarm * Math.sin(m.phase) * 0.08;
+    m.bank += (targetBank - m.bank) * Math.min(1, dt * 6);
+
+    // Subtle porpoising bob
+    m.pos.y += Math.sin(m.strokePhase * 0.5) * 0.012 * m.speed * dt * 8;
   }
 }
 
-function orientMermaid(mesh: THREE.Object3D, heading: THREE.Vector3, bank: number) {
+function orientMermaid(
+  mesh: THREE.Object3D,
+  heading: THREE.Vector3,
+  bank: number,
+  pitchBoost = 0,
+) {
   _fwd.copy(heading).normalize();
+  if (pitchBoost !== 0) {
+    _fwd.y = THREE.MathUtils.clamp(_fwd.y + pitchBoost, -0.85, 0.85);
+    _fwd.normalize();
+  }
   _look.copy(mesh.position).sub(_fwd);
   mesh.lookAt(_look);
   mesh.rotateZ(bank);
@@ -1756,9 +1918,9 @@ export function FemaleMermaids() {
       const m = mermaids[i]!;
       const fleeing = m.alarm > 0.25;
       const swimAmp =
-        0.09 + m.speed * 0.05 + (fleeing ? 0.07 : 0) + m.curiosity * 0.025;
+        0.11 + m.speed * 0.065 + (fleeing ? 0.09 : 0) + m.curiosity * 0.03;
 
-      stepSoftBody(m, dt, swimAmp, t + m.phase * 0.08);
+      stepSoftBody(m, dt, swimAmp, t);
 
       const bodyPos = m.mesh.geometry.attributes.position as THREE.BufferAttribute;
       deformMeshFromLattice(
@@ -1837,14 +1999,24 @@ export function FemaleMermaids() {
       m.armMesh.position.copy(m.pos);
       m.accentMesh.position.copy(m.pos);
 
-      const bank = THREE.MathUtils.clamp(
-        -m.heading.x * 0.38 +
-          m.vel.x * 0.022 +
-          m.alarm * Math.sin(m.phase) * 0.1,
-        -0.38,
-        0.38,
-      );
-      orientMermaid(m.mesh, m.heading, bank);
+      // Arm swim stroke on distal verts
+      {
+        const arr = m.armMesh.geometry.attributes.position.array as Float32Array;
+        const stroke = Math.sin(m.strokePhase);
+        const stroke2 = Math.sin(m.strokePhase * 2);
+        for (let v = 0; v < arr.length / 3; v++) {
+          const z = m.armRest[v * 3 + 2]!;
+          const distal = THREE.MathUtils.clamp((z + 1.2) / 2.2, 0, 1);
+          arr[v * 3]! += stroke * 0.045 * distal;
+          arr[v * 3 + 1]! += stroke2 * 0.032 * distal;
+        }
+        (m.armMesh.geometry.attributes.position as THREE.BufferAttribute).needsUpdate =
+          true;
+      }
+
+      const pitchBob =
+        Math.sin(m.strokePhase * 0.5) * 0.05 * (0.5 + m.speed * 0.1);
+      orientMermaid(m.mesh, m.heading, m.bank, m.pitch * 0.15 + pitchBob);
       m.tailMesh.quaternion.copy(m.mesh.quaternion);
       m.hairMesh.quaternion.copy(m.mesh.quaternion);
       m.detailMesh.quaternion.copy(m.mesh.quaternion);
