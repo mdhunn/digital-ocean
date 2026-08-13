@@ -1,113 +1,20 @@
 /**
- * Procedural underwater ambience — Web Audio only, no assets.
+ * Underwater ambient music — decoded loop, not a noise bed.
  * Unlock + resume must happen inside a user gesture (the music toggle).
  */
+
+const SOURCES = ["/audio/reef-ambient.ogg", "/audio/reef-ambient.m4a"];
 
 type OceanGraph = {
   ctx: AudioContext;
   master: GainNode;
-  lfo: OscillatorNode;
+  source: AudioBufferSourceNode | null;
+  buffer: AudioBuffer | null;
 };
 
 let graph: OceanGraph | null = null;
-
-function makeNoiseBuffer(ctx: AudioContext, seconds: number, brown: boolean) {
-  const rate = ctx.sampleRate;
-  const length = Math.floor(rate * seconds);
-  const buf = ctx.createBuffer(1, length, rate);
-  const data = buf.getChannelData(0);
-  let last = 0;
-  for (let i = 0; i < length; i++) {
-    const white = Math.random() * 2 - 1;
-    if (brown) {
-      last = (last + white * 0.02) * 0.986;
-      data[i] = last * 3.2;
-    } else {
-      data[i] = white;
-    }
-  }
-  return buf;
-}
-
-function startLoop(
-  ctx: AudioContext,
-  buffer: AudioBuffer,
-  dest: AudioNode,
-  playbackRate = 1,
-) {
-  const src = ctx.createBufferSource();
-  src.buffer = buffer;
-  src.loop = true;
-  src.playbackRate.value = playbackRate;
-  src.connect(dest);
-  src.start();
-  return src;
-}
-
-function buildGraph(ctx: AudioContext): OceanGraph {
-  const master = ctx.createGain();
-  master.gain.value = 0;
-  master.connect(ctx.destination);
-
-  const bed = ctx.createGain();
-  bed.gain.value = 0.22;
-  bed.connect(master);
-
-  const brownFilter = ctx.createBiquadFilter();
-  brownFilter.type = "lowpass";
-  brownFilter.frequency.value = 380;
-  brownFilter.Q.value = 0.55;
-  brownFilter.connect(bed);
-  startLoop(ctx, makeNoiseBuffer(ctx, 3.2, true), brownFilter, 0.55);
-
-  const wash = ctx.createBiquadFilter();
-  wash.type = "bandpass";
-  wash.frequency.value = 720;
-  wash.Q.value = 0.7;
-  const washGain = ctx.createGain();
-  washGain.gain.value = 0.07;
-  wash.connect(washGain);
-  washGain.connect(master);
-  startLoop(ctx, makeNoiseBuffer(ctx, 2.4, false), wash, 0.35);
-
-  const droneA = ctx.createOscillator();
-  droneA.type = "sine";
-  droneA.frequency.value = 49;
-  const droneB = ctx.createOscillator();
-  droneB.type = "sine";
-  droneB.frequency.value = 73.5;
-  const droneGain = ctx.createGain();
-  droneGain.gain.value = 0.045;
-  droneA.connect(droneGain);
-  droneB.connect(droneGain);
-  droneGain.connect(master);
-  droneA.start();
-  droneB.start();
-
-  const shimmer = ctx.createOscillator();
-  shimmer.type = "sine";
-  shimmer.frequency.value = 392;
-  const shimmerGain = ctx.createGain();
-  shimmerGain.gain.value = 0.012;
-  shimmer.connect(shimmerGain);
-  shimmerGain.connect(master);
-  shimmer.start();
-
-  const lfo = ctx.createOscillator();
-  lfo.type = "sine";
-  lfo.frequency.value = 0.07;
-  const lfoGain = ctx.createGain();
-  lfoGain.gain.value = 90;
-  lfo.connect(lfoGain);
-  lfoGain.connect(brownFilter.frequency);
-  const lfoShimmer = ctx.createGain();
-  lfoShimmer.gain.value = 0.008;
-  lfo.connect(lfoShimmer);
-  lfoShimmer.connect(shimmerGain.gain);
-  lfo.start();
-
-  return { ctx, master, lfo };
-}
+let wantOn = false;
+let loadPromise: Promise<void> | null = null;
 
 function getContextCtor(): typeof AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -119,26 +26,95 @@ function getContextCtor(): typeof AudioContext | null {
   );
 }
 
-export function unlockOceanAudio(): void {
+function ensureGraph(): OceanGraph | null {
   const Ctor = getContextCtor();
-  if (!Ctor) return;
-  if (!graph) {
-    const ctx = new Ctor({ latencyHint: "playback" });
-    graph = buildGraph(ctx);
+  if (!Ctor) return null;
+  if (graph) return graph;
+  const ctx = new Ctor({ latencyHint: "playback" });
+  const master = ctx.createGain();
+  master.gain.value = 0;
+  master.connect(ctx.destination);
+  graph = { ctx, master, source: null, buffer: null };
+  return graph;
+}
+
+async function loadBuffer(g: OceanGraph): Promise<void> {
+  if (g.buffer) return;
+  let lastErr: unknown = null;
+  for (const url of SOURCES) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const raw = await res.arrayBuffer();
+      g.buffer = await g.ctx.decodeAudioData(raw.slice(0));
+      return;
+    } catch (err) {
+      lastErr = err;
+    }
   }
-  if (graph.ctx.state === "suspended") {
-    void graph.ctx.resume();
+  if (!g.buffer) throw lastErr ?? new Error("Could not decode ambient loop");
+}
+
+function startSource(g: OceanGraph) {
+  if (!g.buffer) return;
+  if (g.source) {
+    try {
+      g.source.stop();
+    } catch {
+      /* already stopped */
+    }
+    g.source.disconnect();
+    g.source = null;
+  }
+  const src = g.ctx.createBufferSource();
+  src.buffer = g.buffer;
+  src.loop = true;
+  src.loopStart = 1.6;
+  src.loopEnd = Math.max(2, g.buffer.duration - 1.6);
+  src.connect(g.master);
+  src.start();
+  g.source = src;
+}
+
+export function unlockOceanAudio(): void {
+  const g = ensureGraph();
+  if (!g) return;
+  if (g.ctx.state === "suspended") void g.ctx.resume();
+  if (!loadPromise) {
+    loadPromise = loadBuffer(g)
+      .then(() => {
+        if (wantOn) startSource(g);
+      })
+      .catch(() => {
+        loadPromise = null;
+      });
   }
 }
 
 export function setOceanMusic(on: boolean): void {
+  wantOn = on;
   unlockOceanAudio();
-  if (!graph) return;
-  const { ctx, master } = graph;
-  if (ctx.state === "suspended") void ctx.resume();
-  const now = ctx.currentTime;
-  master.gain.cancelScheduledValues(now);
-  master.gain.setTargetAtTime(on ? 0.85 : 0, now, 0.38);
+  const g = graph;
+  if (!g) return;
+  if (g.ctx.state === "suspended") void g.ctx.resume();
+  const now = g.ctx.currentTime;
+  g.master.gain.cancelScheduledValues(now);
+  g.master.gain.setTargetAtTime(on ? 0.62 : 0, now, 0.45);
+  if (on && g.buffer && !g.source) startSource(g);
+  if (!on && g.source) {
+    const src = g.source;
+    window.setTimeout(() => {
+      if (!wantOn && graph?.source === src) {
+        try {
+          src.stop();
+        } catch {
+          /* ignore */
+        }
+        src.disconnect();
+        if (graph.source === src) graph.source = null;
+      }
+    }, 1400);
+  }
 }
 
 export function resumeOceanAudio(): void {
