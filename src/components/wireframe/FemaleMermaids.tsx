@@ -5,6 +5,16 @@ import {
   registerMermaidPositions,
   sharkWorldPositions,
 } from "./creatureRegistry";
+import { qualityRuntime, softItersFor } from "./quality";
+import {
+  consumeFixedSteps,
+  makeParticle,
+  solveSprings,
+  SOFT_FIXED_DT,
+  verletIntegrate,
+  type SoftParticle,
+  type SoftSpring,
+} from "./softBody";
 
 /**
  * High-polygon female mermaids — soft-body wireframe swimmers.
@@ -238,27 +248,6 @@ function spineYOffset(u: number): number {
 }
 
 /* ── Soft-body types ───────────────────────────────────────────── */
-
-type SoftParticle = {
-  x: number;
-  y: number;
-  z: number;
-  px: number;
-  py: number;
-  pz: number;
-  pinned: boolean;
-};
-
-type SoftSpring = {
-  a: number;
-  b: number;
-  rest: number;
-  stiff: number;
-};
-
-function makeParticle(x: number, y: number, z: number, pinned = false): SoftParticle {
-  return { x, y, z, px: x, py: y, pz: z, pinned };
-}
 
 type MermaidSim = {
   id: number;
@@ -1396,8 +1385,6 @@ function createMermaid(id: number): MermaidSim {
 
 /* ── Soft-body + realistic swim ─────────────────────────────────── */
 
-const _diff = new THREE.Vector3();
-
 /**
  * Traveling lateral S-wave for mermaid locomotion.
  * Power from hips → peduncle; shoulders counter-sway slightly.
@@ -1406,7 +1393,7 @@ const _diff = new THREE.Vector3();
 function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
   const particles = m.particles;
   const ringSize = 1 + m.radial;
-  const damp = Math.pow(0.905, dt * 60);
+  const damp = 0.905;
 
   // Inertial soft tissue from acceleration
   const invDt = 1 / Math.max(dt, 1e-4);
@@ -1527,11 +1514,11 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
             Math.sin(m.strokePhase * 2 + lobePhase * 1.4) * swimAmp * 0.055 * w;
           const jiggleZ = m.bustDisp.z * w * 0.95;
 
-          q.x += jiggleX * dt * 62;
-          q.y += jiggleY * dt * 62;
-          q.z += jiggleZ * dt * 48;
-          q.x -= aLat * 0.00055 * w * dt * 60;
-          q.y -= aUp * 0.00065 * w * dt * 60;
+          q.x += jiggleX * Math.min(dt * 62, 1.05);
+          q.y += jiggleY * Math.min(dt * 62, 1.05);
+          q.z += jiggleZ * Math.min(dt * 48, 0.85);
+          q.x -= aLat * 0.00055 * w * Math.min(dt * 60, 1);
+          q.y -= aUp * 0.00065 * w * Math.min(dt * 60, 1);
         }
       }
 
@@ -1555,42 +1542,11 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
     }
   }
 
-  for (const p of particles) {
-    if (p.pinned) {
-      p.px = p.x;
-      p.py = p.y;
-      p.pz = p.z;
-      continue;
-    }
-    const vx = (p.x - p.px) * damp;
-    const vy = (p.y - p.py) * damp;
-    const vz = (p.z - p.pz) * damp;
-    p.px = p.x;
-    p.py = p.y;
-    p.pz = p.z;
-    p.x += vx;
-    p.y += vy;
-    p.z += vz;
-  }
+  verletIntegrate(particles, dt, damp);
 
-  for (let iter = 0; iter < SOFT_ITERS; iter++) {
-    for (const s of m.springs) {
-      const a = particles[s.a]!;
-      const b = particles[s.b]!;
-      _diff.set(b.x - a.x, b.y - a.y, b.z - a.z);
-      const dist = _diff.length() || 1e-6;
-      const corr = ((dist - s.rest) / dist) * 0.5 * s.stiff;
-      if (!a.pinned) {
-        a.x += _diff.x * corr;
-        a.y += _diff.y * corr;
-        a.z += _diff.z * corr;
-      }
-      if (!b.pinned) {
-        b.x -= _diff.x * corr;
-        b.y -= _diff.y * corr;
-        b.z -= _diff.z * corr;
-      }
-    }
+  const iters = softItersFor(SOFT_ITERS, qualityRuntime.tier);
+  for (let iter = 0; iter < iters; iter++) {
+    solveSprings(particles, m.springs);
 
     for (let s = 0; s < m.spineCount; s++) {
       const u = s / (m.spineCount - 1);
@@ -1899,10 +1855,12 @@ function orientMermaid(
 export function FemaleMermaids() {
   const group = useRef<THREE.Group>(null);
   const { camera } = useThree();
+  const acc = useRef({ v: 0 });
 
   const mermaids = useMemo(() => {
     const list: MermaidSim[] = [];
     for (let i = 0; i < MERMAID_COUNT; i++) list.push(createMermaid(i));
+    registerMermaidPositions(list.map((m) => m.pos));
     return list;
   }, []);
 
@@ -1923,8 +1881,10 @@ export function FemaleMermaids() {
       SURFACE_Y - 5,
     );
 
-    registerMermaidPositions(mermaids.map((m) => m.pos));
     aiStep(mermaids, dt, _pointerWorld);
+
+    const steps = consumeFixedSteps(acc.current, dt);
+    const stepDt = steps > 0 ? SOFT_FIXED_DT : 0;
 
     for (let i = 0; i < mermaids.length; i++) {
       const m = mermaids[i]!;
@@ -1932,77 +1892,95 @@ export function FemaleMermaids() {
       const swimAmp =
         0.13 + m.speed * 0.075 + (fleeing ? 0.1 : 0) + m.curiosity * 0.035;
 
-      stepSoftBody(m, dt, swimAmp, t);
+      if (steps > 0) {
+        for (let k = 0; k < steps; k++) {
+          stepSoftBody(m, stepDt, swimAmp, t);
+        }
 
-      const bodyPos = m.mesh.geometry.attributes.position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        bodyPos,
-        m.restVerts,
-        m.particles,
-        m.influence,
-        m.weights,
-        restLattices[i]!,
-        true,
-      );
+        const bodyPos = m.mesh.geometry.attributes.position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          bodyPos,
+          m.restVerts,
+          m.particles,
+          m.influence,
+          m.weights,
+          restLattices[i]!,
+          true,
+        );
 
-      const tailPos = m.tailMesh.geometry.attributes
-        .position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        tailPos,
-        m.tailRest,
-        m.particles,
-        m.tailInfluence,
-        m.tailWeights,
-        restLattices[i]!,
-        false,
-      );
+        const tailPos = m.tailMesh.geometry.attributes
+          .position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          tailPos,
+          m.tailRest,
+          m.particles,
+          m.tailInfluence,
+          m.tailWeights,
+          restLattices[i]!,
+          false,
+        );
 
-      const hairPos = m.hairMesh.geometry.attributes
-        .position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        hairPos,
-        m.hairRest,
-        m.particles,
-        m.hairInfluence,
-        m.hairWeights,
-        restLattices[i]!,
-        false,
-      );
+        const hairPos = m.hairMesh.geometry.attributes
+          .position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          hairPos,
+          m.hairRest,
+          m.particles,
+          m.hairInfluence,
+          m.hairWeights,
+          restLattices[i]!,
+          false,
+        );
 
-      const detPos = m.detailMesh.geometry.attributes
-        .position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        detPos,
-        m.detailRest,
-        m.particles,
-        m.detailInfluence,
-        m.detailWeights,
-        restLattices[i]!,
-        true,
-      );
+        const detPos = m.detailMesh.geometry.attributes
+          .position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          detPos,
+          m.detailRest,
+          m.particles,
+          m.detailInfluence,
+          m.detailWeights,
+          restLattices[i]!,
+          true,
+        );
 
-      const armPos = m.armMesh.geometry.attributes.position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        armPos,
-        m.armRest,
-        m.particles,
-        m.armInfluence,
-        m.armWeights,
-        restLattices[i]!,
-        false,
-      );
+        const armPos = m.armMesh.geometry.attributes.position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          armPos,
+          m.armRest,
+          m.particles,
+          m.armInfluence,
+          m.armWeights,
+          restLattices[i]!,
+          false,
+        );
 
-      const accPos = m.accentMesh.geometry.attributes
-        .position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        accPos,
-        m.accentRest,
-        m.particles,
-        m.accentInfluence,
-        m.accentWeights,
-        restLattices[i]!,
-        true,
-      );
+        const accPos = m.accentMesh.geometry.attributes
+          .position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          accPos,
+          m.accentRest,
+          m.particles,
+          m.accentInfluence,
+          m.accentWeights,
+          restLattices[i]!,
+          true,
+        );
+
+        {
+          const arr = m.armMesh.geometry.attributes.position.array as Float32Array;
+          const stroke = Math.sin(m.strokePhase);
+          const stroke2 = Math.sin(m.strokePhase * 2);
+          for (let v = 0; v < arr.length / 3; v++) {
+            const z = m.armRest[v * 3 + 2]!;
+            const distal = THREE.MathUtils.clamp((z + 1.2) / 2.2, 0, 1);
+            arr[v * 3]! += stroke * 0.045 * distal;
+            arr[v * 3 + 1]! += stroke2 * 0.032 * distal;
+          }
+          (m.armMesh.geometry.attributes.position as THREE.BufferAttribute).needsUpdate =
+            true;
+        }
+      }
 
       m.mesh.position.copy(m.pos);
       m.tailMesh.position.copy(m.pos);
@@ -2010,21 +1988,6 @@ export function FemaleMermaids() {
       m.detailMesh.position.copy(m.pos);
       m.armMesh.position.copy(m.pos);
       m.accentMesh.position.copy(m.pos);
-
-      // Arm swim stroke on distal verts
-      {
-        const arr = m.armMesh.geometry.attributes.position.array as Float32Array;
-        const stroke = Math.sin(m.strokePhase);
-        const stroke2 = Math.sin(m.strokePhase * 2);
-        for (let v = 0; v < arr.length / 3; v++) {
-          const z = m.armRest[v * 3 + 2]!;
-          const distal = THREE.MathUtils.clamp((z + 1.2) / 2.2, 0, 1);
-          arr[v * 3]! += stroke * 0.045 * distal;
-          arr[v * 3 + 1]! += stroke2 * 0.032 * distal;
-        }
-        (m.armMesh.geometry.attributes.position as THREE.BufferAttribute).needsUpdate =
-          true;
-      }
 
       const pitchBob =
         Math.sin(m.strokePhase * 0.5) * 0.05 * (0.5 + m.speed * 0.1);

@@ -2,6 +2,16 @@ import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { fishWorldPositions, dolphinWorldPositions, mermaidWorldPositions, registerSharkPositions } from "./creatureRegistry";
+import { qualityRuntime, softItersFor } from "./quality";
+import {
+  consumeFixedSteps,
+  makeParticle,
+  solveSprings,
+  SOFT_FIXED_DT,
+  verletIntegrate,
+  type SoftParticle,
+  type SoftSpring,
+} from "./softBody";
 
 /**
  * High-polygon great white sharks (Carcharodon carcharias).
@@ -99,27 +109,6 @@ function bodyWidthScale(u: number): number {
 }
 
 /* ── Soft-body types ───────────────────────────────────────────── */
-
-type SoftParticle = {
-  x: number;
-  y: number;
-  z: number;
-  px: number;
-  py: number;
-  pz: number;
-  pinned: boolean;
-};
-
-type SoftSpring = {
-  a: number;
-  b: number;
-  rest: number;
-  stiff: number;
-};
-
-function makeParticle(x: number, y: number, z: number, pinned = false): SoftParticle {
-  return { x, y, z, px: x, py: y, pz: z, pinned };
-}
 
 type SharkSim = {
   id: number;
@@ -836,12 +825,10 @@ function createShark(id: number): SharkSim {
 
 /* ── Soft-body step — caudal-driven undulation (thunniform) ────── */
 
-const _diff = new THREE.Vector3();
-
 function stepSoftBody(shark: SharkSim, dt: number, swimAmp: number, t: number) {
   const particles = shark.particles;
   const ringSize = 1 + shark.radial;
-  const damp = Math.pow(0.92, dt * 60);
+  const damp = 0.92;
 
   // Great whites: stiff front, flexible rear — wave stronger toward tail
   for (let s = 0; s < shark.spineCount; s++) {
@@ -883,42 +870,11 @@ function stepSoftBody(shark: SharkSim, dt: number, swimAmp: number, t: number) {
     }
   }
 
-  for (const p of particles) {
-    if (p.pinned) {
-      p.px = p.x;
-      p.py = p.y;
-      p.pz = p.z;
-      continue;
-    }
-    const vx = (p.x - p.px) * damp;
-    const vy = (p.y - p.py) * damp;
-    const vz = (p.z - p.pz) * damp;
-    p.px = p.x;
-    p.py = p.y;
-    p.pz = p.z;
-    p.x += vx;
-    p.y += vy;
-    p.z += vz;
-  }
+  verletIntegrate(particles, dt, damp);
 
-  for (let iter = 0; iter < SOFT_ITERS; iter++) {
-    for (const s of shark.springs) {
-      const a = particles[s.a]!;
-      const b = particles[s.b]!;
-      _diff.set(b.x - a.x, b.y - a.y, b.z - a.z);
-      const d = _diff.length() || 1e-6;
-      const corr = ((d - s.rest) / d) * 0.5 * s.stiff;
-      if (!a.pinned) {
-        a.x += _diff.x * corr;
-        a.y += _diff.y * corr;
-        a.z += _diff.z * corr;
-      }
-      if (!b.pinned) {
-        b.x -= _diff.x * corr;
-        b.y -= _diff.y * corr;
-        b.z -= _diff.z * corr;
-      }
-    }
+  const iters = softItersFor(SOFT_ITERS, qualityRuntime.tier);
+  for (let iter = 0; iter < iters; iter++) {
+    solveSprings(particles, shark.springs);
 
     // Shape retention toward anatomical rest
     for (let s = 0; s < shark.spineCount; s++) {
@@ -1137,10 +1093,12 @@ function orientShark(mesh: THREE.Object3D, heading: THREE.Vector3, bank: number)
 
 export function GreatWhiteSharks() {
   const group = useRef<THREE.Group>(null);
+  const acc = useRef({ v: 0 });
 
   const sharks = useMemo(() => {
     const list: SharkSim[] = [];
     for (let i = 0; i < SHARK_COUNT; i++) list.push(createShark(i));
+    registerSharkPositions(list.map((s) => s.pos));
     return list;
   }, []);
 
@@ -1151,58 +1109,63 @@ export function GreatWhiteSharks() {
   useFrame(({ clock }, delta) => {
     const dt = Math.min(delta, 0.05);
     const t = clock.elapsedTime;
-    registerSharkPositions(sharks.map((s) => s.pos));
     aiStep(sharks, dt);
+
+    const steps = consumeFixedSteps(acc.current, dt);
+    const stepDt = steps > 0 ? SOFT_FIXED_DT : 0;
 
     for (let i = 0; i < sharks.length; i++) {
       const s = sharks[i]!;
       const hunting = s.hunger >= HUNGER_THRESHOLD && s.huntTarget != null;
-      // Soft amplitude: stronger at tail when hunting slightly more
       const swimAmp = 0.07 + s.speed * 0.06 + (hunting ? 0.04 : 0);
 
-      stepSoftBody(s, dt, swimAmp, t + s.phase * 0.08);
+      if (steps > 0) {
+        for (let k = 0; k < steps; k++) {
+          stepSoftBody(s, stepDt, swimAmp, t + s.phase * 0.08);
+        }
 
-      const bodyPos = s.mesh.geometry.attributes.position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        bodyPos,
-        s.restVerts,
-        s.particles,
-        s.influence,
-        s.weights,
-        restLattices[i]!,
-      );
+        const bodyPos = s.mesh.geometry.attributes.position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          bodyPos,
+          s.restVerts,
+          s.particles,
+          s.influence,
+          s.weights,
+          restLattices[i]!,
+        );
 
-      const finPos = s.finMesh.geometry.attributes.position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        finPos,
-        s.finRest,
-        s.particles,
-        s.finInfluence,
-        s.finWeights,
-        restLattices[i]!,
-      );
+        const finPos = s.finMesh.geometry.attributes.position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          finPos,
+          s.finRest,
+          s.particles,
+          s.finInfluence,
+          s.finWeights,
+          restLattices[i]!,
+        );
 
-      const detPos = s.detailMesh.geometry.attributes
-        .position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        detPos,
-        s.detailRest,
-        s.particles,
-        s.detailInfluence,
-        s.detailWeights,
-        restLattices[i]!,
-      );
+        const detPos = s.detailMesh.geometry.attributes
+          .position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          detPos,
+          s.detailRest,
+          s.particles,
+          s.detailInfluence,
+          s.detailWeights,
+          restLattices[i]!,
+        );
 
-      const teethPos = s.teethMesh.geometry.attributes
-        .position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        teethPos,
-        s.teethRest,
-        s.particles,
-        s.teethInfluence,
-        s.teethWeights,
-        restLattices[i]!,
-      );
+        const teethPos = s.teethMesh.geometry.attributes
+          .position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          teethPos,
+          s.teethRest,
+          s.particles,
+          s.teethInfluence,
+          s.teethWeights,
+          restLattices[i]!,
+        );
+      }
 
       s.mesh.position.copy(s.pos);
       s.finMesh.position.copy(s.pos);

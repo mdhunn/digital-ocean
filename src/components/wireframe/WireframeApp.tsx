@@ -1,5 +1,6 @@
 import { useEffect, useState, type ComponentType } from "react";
 import { DigitalClock } from "./DigitalClock";
+import { ControlPanel } from "./ControlPanel";
 
 export function WireframeApp() {
   const [Scene, setScene] = useState<ComponentType | null>(null);
@@ -18,6 +19,7 @@ export function WireframeApp() {
     <div className="app-shell">
       <div className="canvas-host">{Scene ? <Scene /> : null}</div>
       <DigitalClock />
+      <ControlPanel />
     </div>
   );
 }

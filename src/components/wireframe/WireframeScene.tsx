@@ -7,7 +7,13 @@ import { TropicalFishSchool } from "./TropicalFishSchool";
 import { GreatWhiteSharks } from "./GreatWhiteSharks";
 import { BottlenoseDolphins } from "./BottlenoseDolphins";
 import { FemaleMermaids } from "./FemaleMermaids";
-
+import { cameraInput } from "./oceanStore";
+import {
+  dropQuality,
+  initQuality,
+  qualityRuntime,
+  type QualityParams,
+} from "./quality";
 
 /**
  * World layout (Y up):
@@ -20,6 +26,8 @@ const SEABED_Y = -1.5;
 const CAM_Y = 1.8;
 const CAM_MAX_Y = SURFACE_Y - 3.5;
 const CAM_MIN_Y = SEABED_Y + 1.1;
+const CAM_HOME: [number, number, number] = [3.2, CAM_Y, 7.5];
+const TARGET_HOME: [number, number, number] = [0, 4.5, -1];
 
 /* ── materials ─────────────────────────────────────────────────── */
 
@@ -158,25 +166,26 @@ function seabedWorldY(x: number, z: number): number {
 
 /* ── Ocean surface only ────────────────────────────────────────── */
 
-function Ocean() {
+function Ocean({ params }: { params: QualityParams }) {
   const surface = useRef<THREE.Mesh>(null);
   const restY = useRef<Float32Array | null>(null);
+  const frame = useRef(0);
 
   const surfaceGeo = useMemo(() => {
-    const g = new THREE.PlaneGeometry(140, 120, 160, 120);
+    const g = new THREE.PlaneGeometry(140, 120, params.oceanW, params.oceanD);
     g.rotateX(-Math.PI / 2);
     const pos = g.attributes.position as THREE.BufferAttribute;
     const base = new Float32Array(pos.count);
     for (let i = 0; i < pos.count; i++) base[i] = pos.getY(i);
     restY.current = base;
     return g;
-  }, []);
+  }, [params.oceanW, params.oceanD]);
 
   const deepGeo = useMemo(() => {
-    const g = new THREE.PlaneGeometry(110, 90, 36, 28);
+    const g = new THREE.PlaneGeometry(110, 90, params.deepW, params.deepD);
     g.rotateX(-Math.PI / 2);
     return g;
-  }, []);
+  }, [params.deepW, params.deepD]);
 
   useFrame(({ clock }) => {
     const mesh = surface.current;
@@ -185,7 +194,9 @@ function Ocean() {
     const t = clock.elapsedTime;
     const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
     const arr = pos.array as Float32Array;
-    for (let i = 0; i < pos.count; i++) {
+    const stride = qualityRuntime.params.oceanStride;
+    const start = frame.current++ % stride;
+    for (let i = start; i < pos.count; i += stride) {
       const ix = i * 3;
       const x = arr[ix]!;
       const z = arr[ix + 2]!;
@@ -590,6 +601,7 @@ function CoralField() {
 
   const group = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
+    if (!qualityRuntime.params.coralSway) return;
     const t = clock.elapsedTime;
     const g = group.current;
     if (!g) return;
@@ -682,21 +694,63 @@ function SkyWire() {
 
 /* ── Camera locked under the surface ───────────────────────────── */
 
+const _offset = new THREE.Vector3();
+const _sph = new THREE.Spherical();
+
 function CameraRig() {
   const controls = useRef<OrbitControlsImpl>(null);
+  const lastReset = useRef(0);
   const { camera, size } = useThree();
 
-  useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
+  useFrame((_, delta) => {
+    const dt = Math.min(delta, 0.08);
     const c = controls.current;
     if (!c) return;
 
-    c.target.y = THREE.MathUtils.clamp(
-      4.2 + Math.sin(t * 0.18) * 0.2,
-      CAM_MIN_Y + 1,
-      SURFACE_Y - 4,
-    );
-    c.target.x = Math.sin(t * 0.09) * 0.35;
+    c.autoRotate = cameraInput.autoRotate && cameraInput.az === 0 && cameraInput.pol === 0;
+
+    if (cameraInput.resetSeq !== lastReset.current) {
+      lastReset.current = cameraInput.resetSeq;
+      camera.position.set(CAM_HOME[0], CAM_HOME[1], CAM_HOME[2]);
+      c.target.set(TARGET_HOME[0], TARGET_HOME[1], TARGET_HOME[2]);
+    }
+
+    const minDist = size.height > size.width ? 4 : 3.5;
+    const maxDist = size.height > size.width ? 14 : 16;
+
+    if (cameraInput.az !== 0 || cameraInput.pol !== 0) {
+      _offset.copy(camera.position).sub(c.target);
+      _sph.setFromVector3(_offset);
+      _sph.theta -= cameraInput.az * 0.95 * dt;
+      _sph.phi = THREE.MathUtils.clamp(
+        _sph.phi - cameraInput.pol * 0.72 * dt,
+        Math.PI * 0.42,
+        Math.PI * 0.92,
+      );
+      _sph.radius = THREE.MathUtils.clamp(_sph.radius, minDist, maxDist);
+      camera.position.copy(c.target).add(_offset.setFromSpherical(_sph));
+    }
+
+    if (cameraInput.zoom !== 0) {
+      _offset.copy(camera.position).sub(c.target);
+      const next = THREE.MathUtils.clamp(
+        _offset.length() - cameraInput.zoom * 5.2 * dt,
+        minDist,
+        maxDist,
+      );
+      _offset.setLength(next);
+      camera.position.copy(c.target).add(_offset);
+    }
+
+    if (cameraInput.autoRotate && cameraInput.az === 0 && cameraInput.pol === 0) {
+      c.target.y = THREE.MathUtils.clamp(
+        4.2 + Math.sin(performance.now() * 0.00018) * 0.2,
+        CAM_MIN_Y + 1,
+        SURFACE_Y - 4,
+      );
+      c.target.x = Math.sin(performance.now() * 0.00009) * 0.35;
+    }
+
     c.update();
 
     if (camera.position.y > CAM_MAX_Y) camera.position.y = CAM_MAX_Y;
@@ -729,15 +783,33 @@ function CameraRig() {
   );
 }
 
-function SceneContent() {
+function PerfGuardian() {
+  const lowMs = useRef(0);
+  useFrame((_, delta) => {
+    const ms = Math.min(delta, 0.1) * 1000;
+    if (ms > 36) {
+      lowMs.current += ms;
+      if (lowMs.current > 2200) {
+        dropQuality();
+        lowMs.current = 0;
+      }
+    } else {
+      lowMs.current = Math.max(0, lowMs.current - ms * 0.45);
+    }
+  });
+  return null;
+}
+
+function SceneContent({ params }: { params: QualityParams }) {
   return (
     <>
       <color attach="background" args={["#05121a"]} />
       <fog attach="fog" args={["#081820", 12, 42]} />
       <ambientLight intensity={1} />
+      <PerfGuardian />
       <CameraRig />
       <SeaFloor />
-      <Ocean />
+      <Ocean params={params} />
       <Cliffs />
       <CoralField />
       <TropicalFishSchool />
@@ -750,11 +822,13 @@ function SceneContent() {
 }
 
 export function WireframeScene() {
+  const params = useMemo(() => initQuality(), []);
+
   return (
     <Canvas
-      dpr={[1, 1.75]}
+      dpr={[1, params.dprMax]}
       gl={{
-        antialias: true,
+        antialias: params.tier === "high",
         alpha: false,
         powerPreference: "high-performance",
         stencil: false,
@@ -767,7 +841,7 @@ export function WireframeScene() {
         camera.lookAt(0, SURFACE_Y - 1, 0);
       }}
     >
-      <SceneContent />
+      <SceneContent params={params} />
     </Canvas>
   );
 }

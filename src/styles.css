@@ -225,6 +225,219 @@
   opacity: 0.9;
 }
 
+/* ── Control panel ─────────────────────────────────────────────── */
+
+.ctrl-dock {
+  position: absolute;
+  z-index: 12;
+  left: max(var(--space-4), env(safe-area-inset-left, 0px));
+  bottom: max(var(--space-4), env(safe-area-inset-bottom, 0px));
+  pointer-events: auto;
+  max-width: min(20rem, calc(100vw - 2 * var(--space-4)));
+}
+
+.ctrl-fab,
+.ctrl-icon-btn,
+.ctrl-chip,
+.ctrl-pad-btn {
+  appearance: none;
+  border: 1px solid color-mix(in oklab, var(--color-accent) 32%, transparent);
+  background: color-mix(in oklab, var(--color-surface) 80%, transparent);
+  color: var(--color-clock);
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.ctrl-fab {
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, #000 35%, transparent),
+    0 10px 28px color-mix(in oklab, #000 40%, transparent),
+    0 0 22px color-mix(in oklab, var(--color-accent) 14%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition:
+    transform var(--motion-quick) var(--ease-smooth),
+    border-color var(--motion-fast) var(--ease-smooth),
+    box-shadow var(--motion-fast) var(--ease-smooth);
+}
+
+.ctrl-fab:hover {
+  border-color: color-mix(in oklab, var(--color-accent) 52%, transparent);
+}
+
+.ctrl-fab:active {
+  transform: scale(0.96);
+}
+
+.ctrl-panel {
+  width: min(18.5rem, calc(100vw - 2 * var(--space-4)));
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in oklab, var(--color-accent) 32%, transparent);
+  background: color-mix(in oklab, var(--color-surface) 86%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, #000 35%, transparent),
+    0 14px 36px color-mix(in oklab, #000 42%, transparent),
+    0 0 28px color-mix(in oklab, var(--color-accent) 12%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  transform-origin: bottom left;
+  animation: ctrl-open var(--motion-fast) var(--ease-smooth);
+}
+
+.ctrl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.ctrl-title {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-clock-dim);
+  font-weight: 500;
+}
+
+.ctrl-icon-btn {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+}
+
+.ctrl-icon-btn:active,
+.ctrl-chip:active,
+.ctrl-pad-btn:active {
+  transform: scale(0.96);
+}
+
+.ctrl-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.ctrl-chip {
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--color-fg);
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  transition:
+    background var(--motion-quick) var(--ease-smooth),
+    border-color var(--motion-quick) var(--ease-smooth),
+    color var(--motion-quick) var(--ease-smooth);
+}
+
+.ctrl-chip[data-on="1"] {
+  background: color-mix(in oklab, var(--color-accent) 22%, var(--color-surface));
+  border-color: color-mix(in oklab, var(--color-accent) 58%, transparent);
+  color: var(--color-clock);
+}
+
+.ctrl-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: 2px;
+  border-top: 1px solid color-mix(in oklab, var(--color-accent) 16%, transparent);
+}
+
+.ctrl-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-clock-dim);
+  padding-top: 4px;
+}
+
+.ctrl-zoom {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ctrl-zoom-label {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-clock-dim);
+}
+
+.ctrl-pad {
+  display: grid;
+  grid-template-columns: 44px 44px 44px;
+  grid-template-rows: 44px 44px 44px;
+  gap: 6px;
+  justify-content: center;
+}
+
+.ctrl-pad-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+}
+
+.ctrl-pad-btn:active {
+  background: color-mix(in oklab, var(--color-accent) 20%, var(--color-surface));
+}
+
+.ctrl-pad-center {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--color-accent) 10%, transparent);
+}
+
+.ctrl-pad-spacer {
+  width: 44px;
+  height: 44px;
+}
+
+@keyframes ctrl-open {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @media (orientation: landscape) and (max-height: 480px) {
   .clock-dock {
     top: max(var(--space-2), env(safe-area-inset-top, 0px));
@@ -249,6 +462,63 @@
     font-size: 0.58rem;
     min-height: 1.25em;
   }
+
+  .ctrl-dock {
+    left: max(var(--space-2), env(safe-area-inset-left, 0px));
+    bottom: max(var(--space-2), env(safe-area-inset-bottom, 0px));
+    max-width: min(36rem, calc(100vw - 8rem));
+  }
+
+  .ctrl-panel {
+    width: auto;
+    max-width: min(34rem, calc(100vw - 7.5rem));
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 8px 10px;
+  }
+
+  .ctrl-head {
+    width: auto;
+  }
+
+  .ctrl-row {
+    width: auto;
+    grid-template-columns: auto auto;
+  }
+
+  .ctrl-section {
+    flex-direction: row;
+    align-items: center;
+    border-top: none;
+    border-left: 1px solid color-mix(in oklab, var(--color-accent) 16%, transparent);
+    padding: 0 0 0 var(--space-2);
+    gap: var(--space-2);
+  }
+
+  .ctrl-kicker {
+    padding-top: 0;
+  }
+
+  .ctrl-pad {
+    grid-template-columns: 40px 40px 40px;
+    grid-template-rows: 40px 40px 40px;
+    gap: 4px;
+  }
+
+  .ctrl-pad-btn,
+  .ctrl-pad-center,
+  .ctrl-pad-spacer {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .ctrl-zoom {
+    grid-template-columns: 40px auto 40px;
+  }
 }
 
 @media (max-width: 390px) {
@@ -259,10 +529,30 @@
   .clock-time {
     font-size: 1.45rem;
   }
+
+  .ctrl-dock {
+    left: max(var(--space-3), env(safe-area-inset-left, 0px));
+    bottom: max(var(--space-3), env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@media (orientation: portrait) and (max-width: 430px) {
+  .ctrl-panel {
+    max-height: min(70dvh, 28rem);
+    overflow: auto;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .clock-btn {
+  .clock-btn,
+  .ctrl-fab,
+  .ctrl-chip,
+  .ctrl-icon-btn,
+  .ctrl-pad-btn {
     transition: none;
+  }
+
+  .ctrl-panel {
+    animation: none;
   }
 }

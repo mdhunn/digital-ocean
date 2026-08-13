@@ -35,8 +35,13 @@ Interactive **3D GPU wireframe ocean** — a retro digital reef scene built with
 - Corner **digital clock** with month calendar
   - Starts in **24-hour** mode
   - Tap to cycle: 24-hour → 12-hour → hidden
+- Collapsible **control panel** (bottom-left)
+  - Fullscreen toggle
+  - Music toggle (procedural underwater ambience)
+  - Camera: reset, auto-spin, zoom, look pad
 - Works on phone, tablet, and desktop (portrait & landscape)
-- Cheerful, soothing teal / coral palette — no on-screen instructions
+- Adaptive quality for soft-body physics and ocean tessellation
+- Cheerful, soothing teal / coral palette — no on-screen instructions outside the panel
 
 ## Stack
 

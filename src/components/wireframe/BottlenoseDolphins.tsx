@@ -5,6 +5,16 @@ import {
   registerDolphinPositions,
   sharkWorldPositions,
 } from "./creatureRegistry";
+import { qualityRuntime, softItersFor } from "./quality";
+import {
+  consumeFixedSteps,
+  makeParticle,
+  solveSprings,
+  SOFT_FIXED_DT,
+  verletIntegrate,
+  type SoftParticle,
+  type SoftSpring,
+} from "./softBody";
 
 /**
  * High-polygon bottlenose dolphins (Tursiops truncatus).
@@ -155,27 +165,6 @@ function spineYOffset(u: number): number {
 }
 
 /* ── Soft-body types ───────────────────────────────────────────── */
-
-type SoftParticle = {
-  x: number;
-  y: number;
-  z: number;
-  px: number;
-  py: number;
-  pz: number;
-  pinned: boolean;
-};
-
-type SoftSpring = {
-  a: number;
-  b: number;
-  rest: number;
-  stiff: number;
-};
-
-function makeParticle(x: number, y: number, z: number, pinned = false): SoftParticle {
-  return { x, y, z, px: x, py: y, pz: z, pinned };
-}
 
 type DolphinSim = {
   id: number;
@@ -1040,12 +1029,10 @@ function createDolphin(id: number): DolphinSim {
 
 /* ── Soft-body: no undulation on head/snout ────────────────────── */
 
-const _diff = new THREE.Vector3();
-
 function stepSoftBody(d: DolphinSim, dt: number, swimAmp: number, t: number) {
   const particles = d.particles;
   const ringSize = 1 + d.radial;
-  const damp = Math.pow(0.91, dt * 60);
+  const damp = 0.91;
 
   for (let s = 0; s < d.spineCount; s++) {
     const u = s / (d.spineCount - 1);
@@ -1084,42 +1071,11 @@ function stepSoftBody(d: DolphinSim, dt: number, swimAmp: number, t: number) {
     }
   }
 
-  for (const p of particles) {
-    if (p.pinned) {
-      p.px = p.x;
-      p.py = p.y;
-      p.pz = p.z;
-      continue;
-    }
-    const vx = (p.x - p.px) * damp;
-    const vy = (p.y - p.py) * damp;
-    const vz = (p.z - p.pz) * damp;
-    p.px = p.x;
-    p.py = p.y;
-    p.pz = p.z;
-    p.x += vx;
-    p.y += vy;
-    p.z += vz;
-  }
+  verletIntegrate(particles, dt, damp);
 
-  for (let iter = 0; iter < SOFT_ITERS; iter++) {
-    for (const s of d.springs) {
-      const a = particles[s.a]!;
-      const b = particles[s.b]!;
-      _diff.set(b.x - a.x, b.y - a.y, b.z - a.z);
-      const dist = _diff.length() || 1e-6;
-      const corr = ((dist - s.rest) / dist) * 0.5 * s.stiff;
-      if (!a.pinned) {
-        a.x += _diff.x * corr;
-        a.y += _diff.y * corr;
-        a.z += _diff.z * corr;
-      }
-      if (!b.pinned) {
-        b.x -= _diff.x * corr;
-        b.y -= _diff.y * corr;
-        b.z -= _diff.z * corr;
-      }
-    }
+  const iters = softItersFor(SOFT_ITERS, qualityRuntime.tier);
+  for (let iter = 0; iter < iters; iter++) {
+    solveSprings(particles, d.springs);
 
     for (let s = 0; s < d.spineCount; s++) {
       const u = s / (d.spineCount - 1);
@@ -1387,10 +1343,12 @@ function orientDolphin(mesh: THREE.Object3D, heading: THREE.Vector3, bank: numbe
 export function BottlenoseDolphins() {
   const group = useRef<THREE.Group>(null);
   const { camera } = useThree();
+  const acc = useRef({ v: 0 });
 
   const dolphins = useMemo(() => {
     const list: DolphinSim[] = [];
     for (let i = 0; i < DOLPHIN_COUNT; i++) list.push(createDolphin(i));
+    registerDolphinPositions(list.map((d) => d.pos));
     return list;
   }, []);
 
@@ -1411,8 +1369,10 @@ export function BottlenoseDolphins() {
       SURFACE_Y - 5,
     );
 
-    registerDolphinPositions(dolphins.map((d) => d.pos));
     aiStep(dolphins, dt, _pointerWorld);
+
+    const steps = consumeFixedSteps(acc.current, dt);
+    const stepDt = steps > 0 ? SOFT_FIXED_DT : 0;
 
     for (let i = 0; i < dolphins.length; i++) {
       const d = dolphins[i]!;
@@ -1420,49 +1380,53 @@ export function BottlenoseDolphins() {
       const swimAmp =
         0.08 + d.speed * 0.055 + (fleeing ? 0.06 : 0) + d.curiosity * 0.02;
 
-      stepSoftBody(d, dt, swimAmp, t + d.phase * 0.08);
+      if (steps > 0) {
+        for (let k = 0; k < steps; k++) {
+          stepSoftBody(d, stepDt, swimAmp, t + d.phase * 0.08);
+        }
 
-      const bodyPos = d.mesh.geometry.attributes.position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        bodyPos,
-        d.restVerts,
-        d.particles,
-        d.influence,
-        d.weights,
-        restLattices[i]!,
-      );
+        const bodyPos = d.mesh.geometry.attributes.position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          bodyPos,
+          d.restVerts,
+          d.particles,
+          d.influence,
+          d.weights,
+          restLattices[i]!,
+        );
 
-      const finPos = d.finMesh.geometry.attributes.position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        finPos,
-        d.finRest,
-        d.particles,
-        d.finInfluence,
-        d.finWeights,
-        restLattices[i]!,
-      );
+        const finPos = d.finMesh.geometry.attributes.position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          finPos,
+          d.finRest,
+          d.particles,
+          d.finInfluence,
+          d.finWeights,
+          restLattices[i]!,
+        );
 
-      const detPos = d.detailMesh.geometry.attributes
-        .position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        detPos,
-        d.detailRest,
-        d.particles,
-        d.detailInfluence,
-        d.detailWeights,
-        restLattices[i]!,
-      );
+        const detPos = d.detailMesh.geometry.attributes
+          .position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          detPos,
+          d.detailRest,
+          d.particles,
+          d.detailInfluence,
+          d.detailWeights,
+          restLattices[i]!,
+        );
 
-      const flukePos = d.flukeMesh.geometry.attributes
-        .position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        flukePos,
-        d.flukeRest,
-        d.particles,
-        d.flukeInfluence,
-        d.flukeWeights,
-        restLattices[i]!,
-      );
+        const flukePos = d.flukeMesh.geometry.attributes
+          .position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          flukePos,
+          d.flukeRest,
+          d.particles,
+          d.flukeInfluence,
+          d.flukeWeights,
+          restLattices[i]!,
+        );
+      }
 
       d.mesh.position.copy(d.pos);
       d.finMesh.position.copy(d.pos);

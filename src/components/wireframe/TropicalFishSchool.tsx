@@ -2,6 +2,16 @@ import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { registerFishPositions } from "./creatureRegistry";
+import { qualityRuntime, softItersFor } from "./quality";
+import {
+  consumeFixedSteps,
+  makeParticle,
+  solveSprings,
+  SOFT_FIXED_DT,
+  verletIntegrate,
+  type SoftParticle,
+  type SoftSpring,
+} from "./softBody";
 
 /**
  * Soft-body cellular-automata tropical fish school.
@@ -161,27 +171,6 @@ class SchoolCA {
 
 /* ── Soft-body particle helpers ────────────────────────────────── */
 
-type SoftParticle = {
-  x: number;
-  y: number;
-  z: number;
-  px: number;
-  py: number;
-  pz: number;
-  pinned: boolean;
-};
-
-type SoftSpring = {
-  a: number;
-  b: number;
-  rest: number;
-  stiff: number;
-};
-
-function makeParticle(x: number, y: number, z: number, pinned = false): SoftParticle {
-  return { x, y, z, px: x, py: y, pz: z, pinned };
-}
-
 /* ── One high-poly soft fish ───────────────────────────────────── */
 
 type FishSim = {
@@ -328,6 +317,26 @@ function buildFishGeometry(seed: number): {
       finPos.push((0.14 + span) * side, -0.1 - span * 0.22, z + 0.05);
     }
     for (let i = 0; i < pSeg; i++) {
+      const a = start + i * 2;
+      finIdx.push(a, a + 1, a + 2);
+      finIdx.push(a + 2, a + 1, a + 3);
+    }
+  }
+
+  // Eye rings — small extra detail on the head
+  for (const side of [-1, 1]) {
+    const start = finPos.length / 3;
+    const ex = 0.22 * side;
+    const ey = 0.12;
+    const ez = -0.78;
+    const segs = 8;
+    const r = 0.07;
+    for (let i = 0; i <= segs; i++) {
+      const a = (i / segs) * Math.PI * 2;
+      finPos.push(ex, ey, ez);
+      finPos.push(ex + Math.cos(a) * r * 0.35, ey + Math.sin(a) * r, ez + Math.cos(a) * r * 0.2);
+    }
+    for (let i = 0; i < segs; i++) {
       const a = start + i * 2;
       finIdx.push(a, a + 1, a + 2);
       finIdx.push(a + 2, a + 1, a + 3);
@@ -520,12 +529,10 @@ function createFish(id: number): FishSim {
 
 /* ── Soft-body step (Verlet + constraints) ─────────────────────── */
 
-const _diff = new THREE.Vector3();
-
 function stepSoftBody(fish: FishSim, dt: number, swimAmp: number, t: number) {
   const particles = fish.particles;
   const ringSize = 1 + fish.radial;
-  const damp = Math.pow(0.9, dt * 60);
+  const damp = 0.9;
 
   // Lateral undulation in local +X (sideways flex while body aims along Z)
   for (let s = 0; s < fish.spineCount; s++) {
@@ -544,42 +551,11 @@ function stepSoftBody(fish: FishSim, dt: number, swimAmp: number, t: number) {
     }
   }
 
-  for (const p of particles) {
-    if (p.pinned) {
-      p.px = p.x;
-      p.py = p.y;
-      p.pz = p.z;
-      continue;
-    }
-    const vx = (p.x - p.px) * damp;
-    const vy = (p.y - p.py) * damp;
-    const vz = (p.z - p.pz) * damp;
-    p.px = p.x;
-    p.py = p.y;
-    p.pz = p.z;
-    p.x += vx;
-    p.y += vy;
-    p.z += vz;
-  }
+  verletIntegrate(particles, dt, damp);
 
-  for (let iter = 0; iter < SOFT_ITERS; iter++) {
-    for (const s of fish.springs) {
-      const a = particles[s.a]!;
-      const b = particles[s.b]!;
-      _diff.set(b.x - a.x, b.y - a.y, b.z - a.z);
-      const d = _diff.length() || 1e-6;
-      const corr = ((d - s.rest) / d) * 0.5 * s.stiff;
-      if (!a.pinned) {
-        a.x += _diff.x * corr;
-        a.y += _diff.y * corr;
-        a.z += _diff.z * corr;
-      }
-      if (!b.pinned) {
-        b.x -= _diff.x * corr;
-        b.y -= _diff.y * corr;
-        b.z -= _diff.z * corr;
-      }
-    }
+  const iters = softItersFor(SOFT_ITERS, qualityRuntime.tier);
+  for (let iter = 0; iter < iters; iter++) {
+    solveSprings(particles, fish.springs);
 
     for (let s = 0; s < fish.spineCount; s++) {
       const u = s / (fish.spineCount - 1);
@@ -756,6 +732,7 @@ function orientFish(mesh: THREE.Object3D, heading: THREE.Vector3, bank: number) 
 export function TropicalFishSchool() {
   const group = useRef<THREE.Group>(null);
   const ca = useMemo(() => new SchoolCA(48, 0.1), []);
+  const acc = useRef({ v: 0 });
 
   const school = useMemo(() => {
     const fish: FishSim[] = [];
@@ -774,32 +751,39 @@ export function TropicalFishSchool() {
     ca.step(dt);
     boidsStep(school, ca, dt);
 
+    const steps = consumeFixedSteps(acc.current, dt);
+    const stepDt = steps > 0 ? SOFT_FIXED_DT : 0;
+
     for (let i = 0; i < school.length; i++) {
       const f = school[i]!;
       const field = ca.field(f.caIndex);
       const swimAmp = 0.1 + field * 0.14 + f.speed * 0.045;
 
-      stepSoftBody(f, dt, swimAmp, t + f.phase * 0.1);
+      if (steps > 0) {
+        for (let s = 0; s < steps; s++) {
+          stepSoftBody(f, stepDt, swimAmp, t + f.phase * 0.1);
+        }
 
-      const bodyPos = f.mesh.geometry.attributes.position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        bodyPos,
-        f.restVerts,
-        f.particles,
-        f.influence,
-        f.weights,
-        restLattices[i]!,
-      );
+        const bodyPos = f.mesh.geometry.attributes.position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          bodyPos,
+          f.restVerts,
+          f.particles,
+          f.influence,
+          f.weights,
+          restLattices[i]!,
+        );
 
-      const finPos = f.finMesh.geometry.attributes.position as THREE.BufferAttribute;
-      deformMeshFromLattice(
-        finPos,
-        f.finRest,
-        f.particles,
-        f.finInfluence,
-        f.finWeights,
-        restLattices[i]!,
-      );
+        const finPos = f.finMesh.geometry.attributes.position as THREE.BufferAttribute;
+        deformMeshFromLattice(
+          finPos,
+          f.finRest,
+          f.particles,
+          f.finInfluence,
+          f.finWeights,
+          restLattices[i]!,
+        );
+      }
 
       f.mesh.position.copy(f.pos);
       f.finMesh.position.copy(f.pos);
