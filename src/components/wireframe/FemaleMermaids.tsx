@@ -1,4 +1,1 @@
-/** Temporary stub — full model restore in progress */
-export function FemaleMermaids() {
-  return null;
-}
+file:///home/workdir/artifacts/FemaleMermaids.tsx
