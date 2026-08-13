@@ -1,59 +1,49 @@
 /**
- * On-device generative island music.
- * Steel pan + offbeat guitar chops + walking bass, scheduled live.
- * No sample loops. No noise beds. No filter-sweep drones.
+ * On-device generative chip-synth island music.
+ * Pulse lead + arp, triangle bass. Scheduled live — no sample loop, no noise bed.
  */
 
-const LOOKAHEAD = 0.14;
-const TICK_MS = 35;
+const LOOKAHEAD = 0.12;
+const TICK_MS = 30;
 
-const PAN_PARTIALS = [
-  { ratio: 1, gain: 1 },
-  { ratio: 2.008, gain: 0.42 },
-  { ratio: 2.99, gain: 0.2 },
-  { ratio: 4.03, gain: 0.1 },
-  { ratio: 5.12, gain: 0.05 },
-];
+/** C island pentatonic (C D E G A) across two octaves */
+const LEAD = [72, 74, 76, 79, 81, 84, 86, 88, 91, 93];
 
-/** G major pentatonic — island steel */
-const PAN_SCALE = [67, 69, 71, 74, 76, 79, 81, 83, 86, 88];
-
-/** Island vamps in G — picked freshly, not a fixed loop */
 const VAMPS: number[][][] = [
   [
-    [55, 59, 62, 67],
-    [60, 64, 67, 72],
-    [55, 59, 62, 67],
-    [62, 66, 69, 74],
+    [60, 64, 67],
+    [65, 69, 72],
+    [60, 64, 67],
+    [67, 71, 74],
   ],
   [
-    [55, 59, 62, 67],
-    [52, 55, 59, 64],
-    [60, 64, 67, 72],
-    [62, 66, 69, 74],
+    [60, 64, 67],
+    [62, 65, 69],
+    [64, 67, 71],
+    [65, 69, 72],
   ],
   [
-    [55, 59, 62, 67],
-    [60, 64, 67, 72],
-    [62, 66, 69, 74],
-    [60, 64, 67, 72],
+    [60, 64, 67, 70],
+    [65, 69, 72],
+    [67, 71, 74],
+    [65, 69, 72],
   ],
 ];
 
 type Graph = {
   ctx: AudioContext;
   master: GainNode;
-  bus: GainNode;
+  pulse25: PeriodicWave;
+  pulse50: PeriodicWave;
   timer: number | null;
   next: number;
-  beat: number;
   step: number;
+  beat: number;
   vamp: number;
   chord: number;
   barsLeft: number;
   degree: number;
-  lastPan: number;
-  phraseLeft: number;
+  restLeft: number;
 };
 
 let graph: Graph | null = null;
@@ -73,102 +63,43 @@ function ctxCtor(): typeof AudioContext | null {
   );
 }
 
-function envGain(
+function makePulse(ctx: AudioContext, duty: number): PeriodicWave {
+  const n = 32;
+  const real = new Float32Array(n);
+  const imag = new Float32Array(n);
+  for (let i = 1; i < n; i++) {
+    imag[i] = (2 / (i * Math.PI)) * Math.sin(i * Math.PI * duty);
+  }
+  return ctx.createPeriodicWave(real, imag);
+}
+
+function chipNote(
   ctx: AudioContext,
   dest: AudioNode,
+  wave: PeriodicWave | "triangle" | "square",
+  midi: number,
   when: number,
-  peak: number,
-  attack: number,
   dur: number,
-): GainNode {
+  peak: number,
+  attack = 0.004,
+) {
+  const osc = ctx.createOscillator();
+  if (wave === "triangle") osc.type = "triangle";
+  else if (wave === "square") osc.type = "square";
+  else osc.setPeriodicWave(wave);
+  osc.frequency.setValueAtTime(midiHz(midi), when);
   const g = ctx.createGain();
   g.gain.setValueAtTime(0.0001, when);
   g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), when + attack);
   g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+  osc.connect(g);
   g.connect(dest);
-  return g;
-}
-
-function playPan(
-  ctx: AudioContext,
-  dest: AudioNode,
-  midi: number,
-  when: number,
-  vel: number,
-) {
-  const freq = midiHz(midi);
-  const dur = 1.15 + Math.max(0, (76 - midi) * 0.035);
-  const g = envGain(ctx, dest, when, 0.11 * vel, 0.006, dur);
-  const pan = ctx.createStereoPanner();
-  pan.pan.setValueAtTime((Math.random() - 0.5) * 0.45, when);
-  pan.connect(g);
-  for (const p of PAN_PARTIALS) {
-    const osc = ctx.createOscillator();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(freq * p.ratio, when);
-    const pg = ctx.createGain();
-    pg.gain.value = p.gain;
-    osc.connect(pg);
-    pg.connect(pan);
-    osc.start(when);
-    osc.stop(when + dur + 0.03);
-    osc.onended = () => {
-      osc.disconnect();
-      pg.disconnect();
-    };
-  }
-}
-
-function playPluck(
-  ctx: AudioContext,
-  dest: AudioNode,
-  midi: number,
-  when: number,
-  peak: number,
-  dur: number,
-  panAmt: number,
-) {
-  const osc = ctx.createOscillator();
-  osc.type = "triangle";
-  osc.frequency.setValueAtTime(midiHz(midi), when);
-  const g = envGain(ctx, dest, when, peak, 0.008, dur);
-  const pan = ctx.createStereoPanner();
-  pan.pan.setValueAtTime(panAmt, when);
-  osc.connect(pan);
-  pan.connect(g);
   osc.start(when);
   osc.stop(when + dur + 0.02);
   osc.onended = () => {
     osc.disconnect();
-    pan.disconnect();
+    g.disconnect();
   };
-}
-
-function playBass(
-  ctx: AudioContext,
-  dest: AudioNode,
-  midi: number,
-  when: number,
-) {
-  const osc = ctx.createOscillator();
-  osc.type = "sine";
-  osc.frequency.setValueAtTime(midiHz(midi), when);
-  const g = envGain(ctx, dest, when, 0.09, 0.012, 0.38);
-  osc.connect(g);
-  osc.start(when);
-  osc.stop(when + 0.42);
-  osc.onended = () => osc.disconnect();
-}
-
-function playClick(ctx: AudioContext, dest: AudioNode, when: number, freq: number) {
-  const osc = ctx.createOscillator();
-  osc.type = "sine";
-  osc.frequency.setValueAtTime(freq, when);
-  const g = envGain(ctx, dest, when, 0.03, 0.002, 0.045);
-  osc.connect(g);
-  osc.start(when);
-  osc.stop(when + 0.06);
-  osc.onended = () => osc.disconnect();
 }
 
 function ensure(): Graph | null {
@@ -179,85 +110,91 @@ function ensure(): Graph | null {
   const master = ctx.createGain();
   master.gain.value = 0;
   master.connect(ctx.destination);
-  const bus = ctx.createGain();
-  bus.gain.value = 1;
-  bus.connect(master);
   graph = {
     ctx,
     master,
-    bus,
+    pulse25: makePulse(ctx, 0.25),
+    pulse50: makePulse(ctx, 0.5),
     timer: null,
     next: 0,
-    beat: 60 / 96,
     step: 0,
+    beat: 60 / 128,
     vamp: 0,
     chord: 0,
     barsLeft: 2,
     degree: 3,
-    lastPan: -8,
-    phraseLeft: 4,
+    restLeft: 0,
   };
   return graph;
 }
 
-function currentChord(g: Graph): number[] {
+function chordNow(g: Graph): number[] {
   return VAMPS[g.vamp][g.chord % VAMPS[g.vamp].length];
 }
 
 function advance(g: Graph) {
   const when = g.next;
-  const step = g.step % 8;
-  const chord = currentChord(g);
+  const sixteenth = g.beat / 4;
+  const step = g.step;
+  const beat = step % 16;
+  const ch = chordNow(g);
 
-  if (step === 0 || step === 4) {
-    playBass(g.ctx, g.bus, chord[0] - 12, when);
+  // Triangle bass — roots on 1 & 3, octave jump island walk
+  if (beat === 0 || beat === 8) {
+    chipNote(g.ctx, g.master, "triangle", ch[0] - 12, when, sixteenth * 3.2, 0.22);
+  } else if (beat === 4 || beat === 12) {
+    const bass = Math.random() < 0.45 ? ch[0] - 5 : ch[0] - 12;
+    chipNote(g.ctx, g.master, "triangle", bass, when, sixteenth * 2.4, 0.16);
   }
 
-  if (step === 2 || step === 3 || step === 6 || step === 7) {
-    if (Math.random() < 0.86) {
-      const n = chord[1 + ((Math.random() * 3) | 0)];
-      playPluck(g.ctx, g.bus, n, when, 0.045, 0.16, step < 4 ? -0.25 : 0.28);
-      if (Math.random() < 0.55) {
-        playPluck(g.ctx, g.bus, n + 7, when + 0.012, 0.022, 0.12, 0.15);
-      }
-    }
+  // Pulse arp — 16ths, island offbeats louder
+  {
+    const idx = [0, 1, 2, 1][beat % 4]!;
+    const note = ch[idx % ch.length]! + (beat % 8 < 4 ? 0 : 12);
+    const vel = beat % 2 === 0 ? 0.035 : 0.07;
+    chipNote(g.ctx, g.master, g.pulse50, note, when, sixteenth * 0.92, vel);
   }
 
-  if (step === 2 || step === 6) {
-    playClick(g.ctx, g.bus, when, 980 + Math.random() * 80);
-  }
-  if (step === 0 && Math.random() < 0.4) {
-    playClick(g.ctx, g.bus, when, 640);
+  // Pulse lead — generative pentatonic phrases
+  if (g.restLeft > 0) {
+    g.restLeft -= 1;
+  } else if (beat !== 1 && beat !== 9 && Math.random() < 0.58) {
+    const hop = Math.random() < 0.18 ? 0 : Math.random() < 0.62 ? 1 : 2;
+    g.degree += (Math.random() < 0.47 ? -1 : 1) * hop;
+    if (g.degree < 0) g.degree = 1;
+    if (g.degree > LEAD.length - 1) g.degree = LEAD.length - 2;
+    const hold = Math.random() < 0.22 ? 2 : 1;
+    chipNote(
+      g.ctx,
+      g.master,
+      g.pulse25,
+      LEAD[g.degree]!,
+      when,
+      sixteenth * (hold * 1.6),
+      0.11,
+    );
+    if (hold === 2) g.restLeft = 1;
+    if (Math.random() < 0.12) g.restLeft += 2 + ((Math.random() * 3) | 0);
   }
 
-  g.phraseLeft -= 1;
-  if (g.phraseLeft <= 0) {
-    g.phraseLeft = 3 + ((Math.random() * 5) | 0);
-    g.lastPan = -4;
-  } else if (step !== 1 && step !== 5 && g.step - g.lastPan >= 1) {
-    if (Math.random() < 0.62) {
-      const hop = Math.random() < 0.2 ? 0 : Math.random() < 0.6 ? 1 : 2;
-      g.degree += (Math.random() < 0.46 ? -1 : 1) * hop;
-      if (g.degree < 0) g.degree = 1;
-      if (g.degree > PAN_SCALE.length - 1) g.degree = PAN_SCALE.length - 2;
-      playPan(g.ctx, g.bus, PAN_SCALE[g.degree], when, 0.7 + Math.random() * 0.35);
-      g.lastPan = g.step;
-    }
+  // Woodblock tick (tiny square, not noise)
+  if (beat === 4 || beat === 12) {
+    chipNote(g.ctx, g.master, "square", 96, when, 0.03, 0.028, 0.001);
   }
 
-  if (step === 7) {
+  if (beat === 15) {
     g.barsLeft -= 1;
     if (g.barsLeft <= 0) {
       g.chord = (g.chord + 1) % VAMPS[g.vamp].length;
-      if (g.chord === 0 && Math.random() < 0.55) {
+      if (g.chord === 0 && Math.random() < 0.5) {
         g.vamp = (Math.random() * VAMPS.length) | 0;
       }
-      g.barsLeft = Math.random() < 0.3 ? 1 : 2;
+      g.barsLeft = Math.random() < 0.35 ? 1 : 2;
     }
   }
 
   g.step += 1;
-  g.next += g.beat * 0.5;
+  g.next += sixteenth;
 }
 
 function tick() {
@@ -269,14 +206,13 @@ function tick() {
 
 function start(g: Graph) {
   if (g.timer != null) return;
-  g.next = g.ctx.currentTime + 0.06;
+  g.next = g.ctx.currentTime + 0.05;
   g.step = 0;
   g.vamp = (Math.random() * VAMPS.length) | 0;
   g.chord = 0;
   g.barsLeft = 2;
-  g.degree = 3;
-  g.lastPan = -8;
-  g.phraseLeft = 5;
+  g.degree = 4;
+  g.restLeft = 2;
   tick();
   g.timer = window.setInterval(tick, TICK_MS);
 }
@@ -302,7 +238,7 @@ export function setOceanMusic(on: boolean): void {
   if (g.ctx.state === "suspended") void g.ctx.resume();
   const now = g.ctx.currentTime;
   g.master.gain.cancelScheduledValues(now);
-  g.master.gain.setTargetAtTime(on ? 0.68 : 0, now, 0.35);
+  g.master.gain.setTargetAtTime(on ? 0.55 : 0, now, 0.28);
   if (on) start(g);
   else stop(g);
 }

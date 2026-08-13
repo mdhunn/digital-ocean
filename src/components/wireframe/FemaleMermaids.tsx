@@ -361,6 +361,57 @@ function skinColor(y: number, r: number, u: number, out: THREE.Color) {
 
 /* ── Body ring sample ──────────────────────────────────────────── */
 
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+/** Half-width / ventral depth / dorsal depth — NOT a radius of revolution. */
+function torsoHalf(u: number): { hw: number; df: number; db: number } {
+  const keys: [number, number, number, number][] = [
+    [U_NECK_END, 0.085, 0.085, 0.085],
+    [U_SHOULDER, 0.37, 0.105, 0.095], // wide flat clavicle bar
+    [0.175, 0.23, 0.125, 0.115],
+    [BUST_U, 0.2, 0.12, 0.11], // ribcage only; breasts added in Cartesian
+    [U_UNDERBUST, 0.175, 0.11, 0.1],
+    [WAIST_U, 0.125, 0.108, 0.1],
+    [HIP_U, 0.245, 0.13, 0.175],
+    [TORSO_END, 0.215, 0.135, 0.15],
+  ];
+  if (u <= keys[0][0]) return { hw: keys[0][1], df: keys[0][2], db: keys[0][3] };
+  for (let i = 1; i < keys.length; i++) {
+    const [u1, hw1, df1, db1] = keys[i]!;
+    const [u0, hw0, df0, db0] = keys[i - 1]!;
+    if (u <= u1) {
+      const t = smoothstep(u0, u1, u);
+      return {
+        hw: lerp(hw0, hw1, t),
+        df: lerp(df0, df1, t),
+        db: lerp(db0, db1, t),
+      };
+    }
+  }
+  const last = keys[keys.length - 1]!;
+  return { hw: last[1], df: last[2], db: last[3] };
+}
+
+function addSphereEnvelope(
+  px: number,
+  py: number,
+  z: number,
+  cx: number,
+  cy: number,
+  cz: number,
+  radius: number,
+): { x: number; y: number } {
+  const dx = px - cx;
+  const dy = py - cy;
+  const dz = z - cz;
+  const d = Math.hypot(dx, dy, dz);
+  if (d >= radius || d < 1e-6) return { x: px, y: py };
+  const s = radius / d;
+  return { x: cx + dx * s, y: cy + dy * s };
+}
+
 function sampleBodyRing(
   u: number,
   a: number,
@@ -368,156 +419,123 @@ function sampleBodyRing(
 ): { x: number; y: number; z: number; r: number; cy: number } {
   const len = BODY_LEN;
   const z = (u - 0.5) * len;
-  const r = bodyRadius(u);
-  const hy = bodyHeightScale(u);
-  const hx = bodyWidthScale(u);
   const cy = spineYOffset(u);
-
   const sa = Math.sin(a);
   const ca = Math.cos(a);
 
-  // ── FACE: flatten front slightly, round back of skull
-  let faceFlat = 1;
-  if (u < U_HEAD_END) {
-    // Ventral-front of head (face looks toward −Z is orientation, but ring is radial)
-    // Flatten the "forward" side of face rings: more cheekbone structure
-    if (sa < -0.15) {
-      // face side — slightly push forward features
-      faceFlat = 1.04 + Math.abs(sa) * 0.06;
-    } else if (sa > 0.4) {
-      // occipital roundness
-      faceFlat = 1.02;
-    }
-    // Jaw square-ish superellipse
-    const n = 2.2;
-    const superR = Math.pow(Math.pow(Math.abs(ca), n) + Math.pow(Math.abs(sa), n), 1 / n) || 1;
-    faceFlat *= 0.92 / superR + 0.08;
-  }
+  let px: number;
+  let py: number;
+  let rOut: number;
 
-  // ── BUST: rounded dual ventral lobes (hemisphere caps — not cones)
-  let bustX = 1;
-  let bustY = 1;
-  if (u > 0.145 && u < 0.275) {
-    const ventral = Math.max(0, -sa);
-    if (ventral > 0.02) {
-      const uu = (u - BUST_U) / 0.06;
-      const lobeAt = (center: number) => {
-        const cc = (ca - center) / 0.42;
-        const d2 = uu * uu + cc * cc;
-        if (d2 >= 1) return 0;
-        return Math.sqrt(1 - d2);
-      };
-      const lobe = Math.max(lobeAt(0.5), lobeAt(-0.5));
-      if (lobe > 0) {
-        const lift = lobe * Math.pow(ventral, 0.62);
-        bustY = 1 + lift * 0.72;
-        bustX = 1 + lift * 0.34;
-        const cleavage = Math.exp(-(ca * ca) * 12);
-        if (sa < -0.22) bustY *= 1 - cleavage * lift * 0.14;
+  if (u < U_NECK_END - 0.012 || u > TORSO_END + 0.05) {
+    const r = bodyRadius(u);
+    const hy = bodyHeightScale(u);
+    const hx = bodyWidthScale(u);
+    let faceFlat = 1;
+    if (u < U_HEAD_END) {
+      if (sa < -0.15) faceFlat = 1.04 + Math.abs(sa) * 0.06;
+      else if (sa > 0.4) faceFlat = 1.02;
+      const n = 2.2;
+      const superR =
+        Math.pow(Math.pow(Math.abs(ca), n) + Math.pow(Math.abs(sa), n), 1 / n) || 1;
+      faceFlat *= 0.92 / superR + 0.08;
+    }
+    let eye = 1;
+    if (u > 0.03 && u < 0.055) {
+      const eu = 1 - Math.abs(u - 0.042) / 0.014;
+      const lat = Math.abs(ca);
+      if (lat > 0.35 && lat < 0.8 && Math.abs(sa) < 0.55 && sa < 0.35) {
+        eye = 1 - eu * 0.28 * (lat - 0.3);
       }
     }
-  }
+    let nose = 1;
+    if (u > 0.035 && u < 0.065 && Math.abs(ca) < 0.22 && sa < -0.35) {
+      const t = 1 - Math.abs(u - 0.05) / 0.02;
+      nose = 1 + t * 0.1;
+    }
+    let chin = 1;
+    if (u > 0.07 && u < U_HEAD_END && Math.abs(ca) < 0.35 && sa < -0.5) {
+      chin = 1.06;
+    }
+    let ridge = 1;
+    if (u > TORSO_END) {
+      if (sa > 0.72) ridge = 1 + (sa - 0.72) * 0.28;
+      if (sa < -0.75) ridge = 1 + (-sa - 0.75) * 0.12;
+    }
+    px = ca * r * hx * faceFlat * eye;
+    py = sa * r * hy * ridge * eye * nose * chin + cy;
+    rOut = r * hy;
+  } else {
+    const { hw, df, db } = torsoHalf(u);
+    const depth = sa < 0 ? df : db;
+    const n = sa < 0 ? 2.7 : 2.05;
+    const sr =
+      Math.pow(Math.pow(Math.abs(ca), n) + Math.pow(Math.abs(sa), n), 1 / n) || 1;
+    px = (ca / sr) * hw;
+    py = (sa / sr) * depth + cy;
 
-  // Underbust crease (sharp indent — heavy tissue sits on this shelf)
-  let underbust = 1;
-  if (u > 0.225 && u < 0.27 && sa < -0.12) {
-    const t = 1 - Math.abs(u - 0.248) / 0.025;
-    underbust = 1 - t * t * 0.1 * Math.abs(sa);
-  }
+    // Soft belly — modest ventral ease, not a revolved pot
+    if (u > U_UNDERBUST && u < HIP_U && sa < -0.2) {
+      py -= Math.pow(-sa, 1.2) * 0.025;
+    }
+    // Spine valley
+    if (sa > 0.55 && Math.abs(ca) < 0.28) {
+      py -= (sa - 0.55) * 0.035;
+    }
+    // Navel
+    if (u > 0.3 && u < 0.33 && Math.abs(ca) < 0.16 && sa < -0.55) {
+      py += 0.018;
+    }
 
-  // ── WAIST: strong hourglass pinch against heavy bust
-  let waist = 1;
-  if (u > 0.26 && u < 0.34) {
-    const t = 1 - Math.abs(u - WAIST_U) / 0.04;
-    if (t > 0) {
-      const side = Math.abs(ca);
-      waist = 1 - t * (0.09 + side * 0.14);
+    // Breasts: two Cartesian spheres on the front of a flat ribcage
+    if (u > 0.155 && u < 0.255 && sa < 0.12) {
+      const br = 0.152;
+      const hang = cy - df * 0.2 - 0.07;
+      const bz = (BUST_U - 0.5) * len + 0.015;
+      for (const side of [-1, 1] as const) {
+        const hit = addSphereEnvelope(px, py, z, side * 0.128, hang, bz, br);
+        if (hit.y < py) {
+          px = hit.x;
+          py = hit.y;
+        }
+      }
+    }
+
+    // Glutes: two dorsal masses, not a torus
+    if (u > 0.33 && u < 0.44 && sa > 0.05) {
+      const gr = 0.13;
+      const gz = (HIP_U - 0.5) * len;
+      for (const side of [-1, 1] as const) {
+        const hit = addSphereEnvelope(px, py, z, side * 0.1, cy + db * 0.35, gz, gr);
+        if (hit.y > py) {
+          px = hit.x;
+          py = hit.y;
+        }
+      }
+    }
+
+    rOut = Math.max(hw, df, db);
+
+    if (u > TORSO_END - 0.015) {
+      const r = bodyRadius(u);
+      const hy = bodyHeightScale(u);
+      const hx = bodyWidthScale(u);
+      const tx = ca * r * hx;
+      const ty = sa * r * hy + cy;
+      const t = smoothstep(TORSO_END - 0.015, TORSO_END + 0.05, u);
+      px = lerp(px, tx, t);
+      py = lerp(py, ty, t);
+      rOut = lerp(rOut, r * hy, t);
     }
   }
 
-  // ── HIPS / glutes: dorsal + lateral swell at transition
-  let hip = 1;
-  if (u > 0.33 && u < 0.45) {
-    const t = 1 - Math.abs(u - HIP_U) / 0.07;
-    if (t > 0) {
-      const dorsal = Math.max(0, sa);
-      const lat = Math.abs(ca);
-      hip = 1 + t * (dorsal * 0.22 + lat * 0.16 + Math.max(0, -sa) * 0.06);
-    }
-  }
-
-  // Navel
-  let navel = 1;
-  if (u > 0.3 && u < 0.33 && Math.abs(ca) < 0.22 && sa < -0.55) {
-    navel = 0.86;
-  }
-
-  // ── Eye sockets
-  let eye = 1;
-  if (u > 0.03 && u < 0.055) {
-    const eu = 1 - Math.abs(u - 0.042) / 0.014;
-    const lat = Math.abs(ca);
-    if (lat > 0.35 && lat < 0.8 && Math.abs(sa) < 0.55 && sa < 0.35) {
-      eye = 1 - eu * 0.28 * (lat - 0.3);
-    }
-  }
-
-  // Nose / brow ridge (front midline)
-  let nose = 1;
-  if (u > 0.035 && u < 0.065 && Math.abs(ca) < 0.22 && sa < -0.35) {
-    const t = 1 - Math.abs(u - 0.05) / 0.02;
-    nose = 1 + t * 0.1;
-  }
-
-  // Chin point
-  let chin = 1;
-  if (u > 0.07 && u < U_HEAD_END && Math.abs(ca) < 0.35 && sa < -0.5) {
-    chin = 1.06;
-  }
-
-  // Scale belt ridge
-  let belt = 1;
-  if (u > 0.39 && u < 0.46) {
-    const t = Math.sin(((u - 0.39) / 0.07) * Math.PI);
-    belt = 1 + t * 0.08;
-  }
-
-  // Tail dorsal ridge / ventral keel
-  let ridge = 1;
-  if (u > TORSO_END) {
-    if (sa > 0.72) ridge = 1 + (sa - 0.72) * 0.28;
-    if (sa < -0.75) ridge = 1 + (-sa - 0.75) * 0.12; // soft ventral keel
-  }
-
-  // Soft belly (human only)
-  const belly =
-    u > U_SHOULDER && u < TORSO_END && sa < -0.15
-      ? 0.97 + Math.abs(sa) * 0.06
-      : 1;
-
-  // Shoulder blade dorsal bumps
-  let scapula = 1;
-  if (u > 0.14 && u < 0.19 && sa > 0.35) {
-    const lat = Math.abs(ca);
-    if (lat > 0.25 && lat < 0.85) {
-      scapula = 1 + 0.08 * Math.sin(((u - 0.14) / 0.05) * Math.PI);
-    }
-  }
-
-  let px =
-    ca * r * hx * waist * hip * underbust * belt * eye * belly * faceFlat * bustX;
-  let py =
-    sa * r * hy * bustY * hip * ridge * eye * nose * chin * navel * belly * scapula +
-    cy;
-
-  // Micro surface — quieter on face for clean silhouette
-  const noiseAmt = u < HEAD_FREEZE_U ? 0.0025 : u < TORSO_END ? 0.007 : 0.01;
+  const noiseAmt = u < HEAD_FREEZE_U ? 0.0025 : u < TORSO_END ? 0.0045 : 0.01;
   const n =
     1 +
     Math.sin(a * 7 + u * 15 + seed) * noiseAmt +
     Math.sin(a * 17 - u * 11) * noiseAmt * 0.5;
 
-  return { x: px * n, y: py * n, z, r: r * hy, cy };
+  return { x: px * n, y: py * n, z, r: rOut, cy };
 }
 
 /* ── Geometry builders ─────────────────────────────────────────── */
@@ -1505,33 +1523,27 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
       q.y += vert * 0.9;
 
       // Breast soft-body (ventral dual lobes)
-      if (u > 0.155 && u < 0.27 && sa < -0.08) {
-        const uu = (u - BUST_U) / 0.06;
-        const lobeAt = (center: number) => {
-          const cc = (ca - center) / 0.42;
-          const d2 = uu * uu + cc * cc;
-          return d2 < 1 ? Math.sqrt(1 - d2) : 0;
-        };
-        const lobe = Math.max(lobeAt(0.5), lobeAt(-0.5));
-        if (lobe > 0.02) {
-          const ventral = Math.max(0, -sa);
-          const w = lobe * Math.pow(ventral, 0.62);
+      if (u > 0.155 && u < 0.27 && sa < 0.15) {
+        const wL = Math.max(0, 1 - Math.hypot(ca - 0.45, (u - BUST_U) / 0.05));
+        const wR = Math.max(0, 1 - Math.hypot(ca + 0.45, (u - BUST_U) / 0.05));
+        const w = Math.max(wL, wR) * Math.max(0, -sa + 0.15);
+        if (w > 0.02) {
           const sideSign = ca >= 0 ? 1 : -1;
           const lobePhase = sideSign * 0.2;
           const jiggleX =
-            m.bustDisp.x * w * 0.85 +
-            Math.sin(m.strokePhase + lobePhase) * swimAmp * 0.03 * w * m.speed * 0.12;
+            m.bustDisp.x * w * 0.7 +
+            Math.sin(m.strokePhase + lobePhase) * swimAmp * 0.025 * w * m.speed * 0.1;
           const jiggleY =
-            m.bustDisp.y * w * 0.95 +
-            Math.sin(m.strokePhase * 2 + lobePhase * 1.4) * swimAmp * 0.04 * w;
-          const jiggleZ = m.bustDisp.z * w * 0.7;
-          const k = Math.min(dt * 40, 0.7);
+            m.bustDisp.y * w * 0.8 +
+            Math.sin(m.strokePhase * 2 + lobePhase * 1.4) * swimAmp * 0.035 * w;
+          const jiggleZ = m.bustDisp.z * w * 0.55;
+          const k = Math.min(dt * 36, 0.65);
 
           q.x += jiggleX * k;
           q.y += jiggleY * k;
-          q.z += jiggleZ * k * 0.75;
-          q.x -= aLat * 0.0004 * w * k;
-          q.y -= aUp * 0.00045 * w * k;
+          q.z += jiggleZ * k * 0.7;
+          q.x -= aLat * 0.00035 * w * k;
+          q.y -= aUp * 0.0004 * w * k;
         }
       }
 

@@ -37,7 +37,7 @@ Interactive **3D GPU wireframe ocean** — a retro digital reef scene built with
   - Tap to cycle: 24-hour → 12-hour → hidden
 - Collapsible **control panel** (bottom-left)
   - Fullscreen toggle
-  - Music toggle (on-device generative island score)
+  - Music toggle (on-device chip-synth island score)
   - Camera: reset, auto-spin, zoom, look pad
 - Works on phone, tablet, and desktop (portrait & landscape)
 - Adaptive quality for soft-body physics and ocean tessellation
