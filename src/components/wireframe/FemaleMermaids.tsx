@@ -394,27 +394,26 @@ function sampleBodyRing(
     faceFlat *= 0.92 / superR + 0.08;
   }
 
-  // ── BUST: heavy dual ventral lobes (photoreal ref — large, soft, forward hang)
+  // ── BUST: rounded dual ventral lobes (hemisphere caps — not cones)
   let bustX = 1;
   let bustY = 1;
-  if (u > 0.15 && u < 0.27) {
-    const bu = 1 - Math.abs(u - BUST_U) / 0.065;
-    if (bu > 0) {
-      const ventral = Math.max(0, -sa);
-      // Peaks offset from midline (~breast centers); wider lobes
-      const lobe =
-        Math.exp(-Math.pow((ca - 0.52) * 2.35, 2)) +
-        Math.exp(-Math.pow((ca + 0.52) * 2.35, 2));
-      if (ventral > 0.05) {
-        const lift = bu * lobe * ventral;
-        // Strong ventral/forward projection + gravity hang
-        bustY = 1 + lift * 1.55;
-        bustX = 1 + lift * 0.42;
-      }
-      // Deep cleavage midline indent
-      if (Math.abs(ca) < 0.22 && sa < -0.3) {
-        bustY *= 1 - bu * 0.22;
-        bustX *= 1 - bu * 0.14;
+  if (u > 0.145 && u < 0.275) {
+    const ventral = Math.max(0, -sa);
+    if (ventral > 0.02) {
+      const uu = (u - BUST_U) / 0.06;
+      const lobeAt = (center: number) => {
+        const cc = (ca - center) / 0.42;
+        const d2 = uu * uu + cc * cc;
+        if (d2 >= 1) return 0;
+        return Math.sqrt(1 - d2);
+      };
+      const lobe = Math.max(lobeAt(0.5), lobeAt(-0.5));
+      if (lobe > 0) {
+        const lift = lobe * Math.pow(ventral, 0.62);
+        bustY = 1 + lift * 0.72;
+        bustX = 1 + lift * 0.34;
+        const cleavage = Math.exp(-(ca * ca) * 12);
+        if (sa < -0.22) bustY *= 1 - cleavage * lift * 0.14;
       }
     }
   }
@@ -423,7 +422,7 @@ function sampleBodyRing(
   let underbust = 1;
   if (u > 0.225 && u < 0.27 && sa < -0.12) {
     const t = 1 - Math.abs(u - 0.248) / 0.025;
-    underbust = 1 - t * t * 0.16 * Math.abs(sa);
+    underbust = 1 - t * t * 0.1 * Math.abs(sa);
   }
 
   // ── WAIST: strong hourglass pinch against heavy bust
@@ -977,21 +976,22 @@ function buildMermaidGeometry(seed: number): {
     }
   }
 
-  // Areola rings on bust peaks (bare torso per photoreal ref)
+  // Areola rings sit on the rounded lobe surface
   for (const side of [-1, 1] as const) {
     const segs = 14;
     const start = dPos.length / 3;
-    const cx = side * 0.16;
-    const cy = spineYOffset(BUST_U) - bodyRadius(BUST_U) * 0.55;
-    const cz = (BUST_U - 0.5) * len - 0.02;
+    const hit = sampleBodyRing(BUST_U, -Math.PI * 0.5 + side * 0.52, 0);
+    const cx = hit.x;
+    const cy = hit.y;
+    const cz = hit.z;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
       const a = t * Math.PI * 2;
       dPos.push(cx, cy, cz);
       dPos.push(
-        cx + Math.cos(a) * 0.055,
-        cy + Math.sin(a) * 0.048,
-        cz + 0.012,
+        cx + Math.cos(a) * 0.05,
+        cy + Math.sin(a) * 0.042,
+        cz + 0.008,
       );
     }
     for (let i = 0; i < segs; i++) {
@@ -999,11 +999,6 @@ function buildMermaidGeometry(seed: number): {
       dIdx.push(a, a + 1, a + 2);
       dIdx.push(a + 2, a + 1, a + 3);
     }
-    // Nipple tip marker
-    const tip = dPos.length / 3;
-    dPos.push(cx, cy, cz + 0.02);
-    dPos.push(cx, cy - 0.012, cz + 0.028);
-    dIdx.push(tip, tip + 1, tip);
   }
 
   // Navel
@@ -1151,12 +1146,12 @@ function buildSoftLattice(): {
     const u = s / (spineCount - 1);
     // Heavy soft tissue through bust — low stiffness for realistic jiggle
     const inBust = u > 0.15 && u < 0.28;
-    const torsoStiff = inBust ? 0.48 : u < TORSO_RETAIN_U ? 1.12 : 1;
+    const torsoStiff = inBust ? 0.82 : u < TORSO_RETAIN_U ? 1.12 : 1;
     for (let k = 0; k < radial; k++) {
       addSpring(base, base + 1 + k, 0.94 * torsoStiff);
-      addSpring(base + 1 + k, base + 1 + ((k + 1) % radial), 0.88 * torsoStiff);
-      addSpring(base + 1 + k, base + 1 + ((k + 2) % radial), inBust ? 0.22 : 0.55);
-      addSpring(base + 1 + k, base + 1 + ((k + 3) % radial), inBust ? 0.14 : 0.38);
+      addSpring(base + 1 + k, base + 1 + ((k + 1) % radial), 0.9 * torsoStiff);
+      addSpring(base + 1 + k, base + 1 + ((k + 2) % radial), inBust ? 0.48 : 0.55);
+      addSpring(base + 1 + k, base + 1 + ((k + 3) % radial), inBust ? 0.32 : 0.38);
     }
     if (s < spineCount - 1) {
       const next = (s + 1) * ringSize;
@@ -1404,6 +1399,7 @@ const _diff = new THREE.Vector3();
  * Soft tissue: breast jiggle from world accel + stroke; hip sway.
  */
 function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
+  dt = Math.min(Math.max(dt, 1 / 240), 1 / 48);
   const particles = m.particles;
   const ringSize = 1 + m.radial;
   const damp = Math.pow(0.905, dt * 60);
@@ -1510,28 +1506,32 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
 
       // Breast soft-body (ventral dual lobes)
       if (u > 0.155 && u < 0.27 && sa < -0.08) {
-        const bu = 1 - Math.abs(u - BUST_U) / 0.06;
-        if (bu > 0) {
+        const uu = (u - BUST_U) / 0.06;
+        const lobeAt = (center: number) => {
+          const cc = (ca - center) / 0.42;
+          const d2 = uu * uu + cc * cc;
+          return d2 < 1 ? Math.sqrt(1 - d2) : 0;
+        };
+        const lobe = Math.max(lobeAt(0.5), lobeAt(-0.5));
+        if (lobe > 0.02) {
           const ventral = Math.max(0, -sa);
-          const lobeL = Math.exp(-Math.pow((ca - 0.48) * 2.6, 2));
-          const lobeR = Math.exp(-Math.pow((ca + 0.48) * 2.6, 2));
-          const lobe = Math.max(lobeL, lobeR);
-          const w = bu * ventral * (0.35 + lobe * 0.9);
+          const w = lobe * Math.pow(ventral, 0.62);
           const sideSign = ca >= 0 ? 1 : -1;
           const lobePhase = sideSign * 0.2;
           const jiggleX =
-            m.bustDisp.x * w * 1.55 +
-            Math.sin(m.strokePhase + lobePhase) * swimAmp * 0.04 * w * m.speed * 0.14;
+            m.bustDisp.x * w * 0.85 +
+            Math.sin(m.strokePhase + lobePhase) * swimAmp * 0.03 * w * m.speed * 0.12;
           const jiggleY =
-            m.bustDisp.y * w * 1.85 +
-            Math.sin(m.strokePhase * 2 + lobePhase * 1.4) * swimAmp * 0.055 * w;
-          const jiggleZ = m.bustDisp.z * w * 0.95;
+            m.bustDisp.y * w * 0.95 +
+            Math.sin(m.strokePhase * 2 + lobePhase * 1.4) * swimAmp * 0.04 * w;
+          const jiggleZ = m.bustDisp.z * w * 0.7;
+          const k = Math.min(dt * 40, 0.7);
 
-          q.x += jiggleX * dt * 62;
-          q.y += jiggleY * dt * 62;
-          q.z += jiggleZ * dt * 48;
-          q.x -= aLat * 0.00055 * w * dt * 60;
-          q.y -= aUp * 0.00065 * w * dt * 60;
+          q.x += jiggleX * k;
+          q.y += jiggleY * k;
+          q.z += jiggleZ * k * 0.75;
+          q.x -= aLat * 0.0004 * w * k;
+          q.y -= aUp * 0.00045 * w * k;
         }
       }
 
@@ -1601,7 +1601,7 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
 
       let retain: number;
       if (u <= HEAD_FREEZE_U) retain = 0.55;
-      else if (u > 0.15 && u < 0.28) retain = 0.028; // heavy soft tissue
+      else if (u > 0.15 && u < 0.28) retain = 0.09;
       else if (u < TORSO_RETAIN_U) retain = 0.14;
       else if (u < TORSO_END) retain = 0.08;
       else if (u > 0.8) retain = 0.03;
@@ -1629,7 +1629,7 @@ function stepSoftBody(m: MermaidSim, dt: number, swimAmp: number, t: number) {
           const sa = Math.sin(a);
           let rs: number;
           if (u <= HEAD_FREEZE_U) rs = 0.28;
-          else if (u > 0.15 && u < 0.28 && sa < -0.04) rs = 0.018;
+          else if (u > 0.15 && u < 0.28 && sa < -0.04) rs = 0.07;
           else if (u < TORSO_RETAIN_U) rs = 0.1;
           else if (u < TORSO_END) rs = 0.06;
           else rs = 0.036;
